@@ -26,9 +26,12 @@ import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.time.temporal.TemporalAdjusters;
 import java.util.LinkedHashMap;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.Supplier;
 
 /**
  * Computes every catalog KPI as an aggregate over the requested period.
@@ -79,10 +82,11 @@ public class AdminDashboardKpiService {
         LocalDate prevStart = period.previousStart(today);
 
         Map<String, KpiCatalog.KpiValue> kpis = new LinkedHashMap<>();
+        RequestData data = new RequestData();
         for (KpiCatalog.KpiDefinition def : KpiCatalog.ALL) {
-            Double current = valueFor(def.key(), start, end);
+            Double current = valueFor(def.key(), start, end, data);
             Double previous = def.supportsTrend()
-                    ? valueFor(def.key(), prevStart, start)   // previous window: [prevStart, start)
+                    ? valueFor(def.key(), prevStart, start, data)   // previous window: [prevStart, start)
                     : null;
             kpis.put(def.key(), new KpiCatalog.KpiValue(
                     current != null ? current : 0.0,
@@ -98,13 +102,13 @@ public class AdminDashboardKpiService {
     }
 
     /** Null means "not computable from this schema" — reported as 0 with no trend. */
-    private Double valueFor(String key, LocalDate start, LocalDate end) {
+    private Double valueFor(String key, LocalDate start, LocalDate end, RequestData data) {
         return switch (key) {
             // People — counts and ratios only
-            case "people.totalUsers" -> (double) users.count();
+            case "people.totalUsers" -> (double) data.count("users", users::count);
             case "people.totalAdmins" -> (double) users.countByRole(Role.ADMIN);
             case "people.totalStaff" -> (double) users.countByRole(Role.STAFF);
-            case "people.activeRatio" -> ratio(users.countByEnabledTrue(), users.count());
+            case "people.activeRatio" -> ratio(users.countByEnabledTrue(), data.count("users", users::count));
 
             // Pharmacies
             case "pharmacies.total" -> (double) pharmacies.count();
@@ -112,29 +116,30 @@ public class AdminDashboardKpiService {
             case "pharmacies.avgHourlyCost" -> avgPharmacyHourlyCost();
 
             // Schedule
-            case "schedule.totalShifts" -> (double) shiftsInWindow(start, end).size();
-            case "schedule.scheduledHours" -> hoursOf(shiftsInWindow(start, end));
-            case "schedule.scheduledPharmacists" -> (double) shiftsInWindow(start, end).stream()
+            case "schedule.totalShifts" -> (double) data.shiftsInWindow(start, end).size();
+            case "schedule.scheduledHours" -> hoursOf(data.shiftsInWindow(start, end));
+            case "schedule.scheduledPharmacists" -> (double) data.shiftsInWindow(start, end).stream()
                     .map(s -> s.getUser().getId()).distinct().count();
-            case "schedule.uniquePharmacies" -> (double) shiftsInWindow(start, end).stream()
+            case "schedule.uniquePharmacies" -> (double) data.shiftsInWindow(start, end).stream()
                     .map(s -> s.getPharmacy().getId()).distinct().count();
 
             // Salary — aggregate of the per-shift cost snapshots (never per person)
-            case "salary.totalMonthlyCost" -> totalCost(shiftsInWindow(start, end));
-            case "salary.totalMonthlyHours" -> hoursOf(shiftsInWindow(start, end));
-            case "salary.avgCostPerHour" -> avgCostPerHour(shiftsInWindow(start, end));
+            case "salary.totalMonthlyCost" -> totalCost(data.shiftsInWindow(start, end));
+            case "salary.totalMonthlyHours" -> hoursOf(data.shiftsInWindow(start, end));
+            case "salary.avgCostPerHour" -> avgCostPerHour(data.shiftsInWindow(start, end));
 
             // Contacts
-            case "contacts.unhandled" -> (double) contacts.countByHandledFalse();
-            case "contacts.total" -> (double) contacts.count();
-            case "contacts.handledRatio" -> ratio(contacts.count() - contacts.countByHandledFalse(), contacts.count());
+            case "contacts.unhandled" -> (double) data.count("unhandledContacts", contacts::countByHandledFalse);
+            case "contacts.total" -> (double) data.count("contacts", contacts::count);
+            case "contacts.handledRatio" -> ratio(data.count("contacts", contacts::count)
+                    - data.count("unhandledContacts", contacts::countByHandledFalse), data.count("contacts", contacts::count));
 
             // Availability
             case "availability.pending" -> (double) availability.countByStatus(AvailabilityRequest.Status.PENDING);
 
             // Calls
             case "calls.total", "calls.completed", "calls.missed", "calls.totalMinutes", "calls.videoCount" ->
-                    callMetric(key, start, end);
+                    callMetric(key, start, end, data);
 
             // Documents
             case "documents.total" -> (double) documents.count();
@@ -145,6 +150,30 @@ public class AdminDashboardKpiService {
 
             default -> 0.0;
         };
+    }
+
+    private record Window(LocalDate start, LocalDate end) {}
+
+    /** Reuse data only within this response; never retain one user's request
+     * across requests or return stale aggregates after a database update. */
+    private final class RequestData {
+        private final Map<Window, List<ScheduleShift>> scheduleWindows = new HashMap<>();
+        private final Map<Window, List<CallHistory>> callWindows = new HashMap<>();
+        private final Map<String, Long> counts = new HashMap<>();
+
+        List<ScheduleShift> shiftsInWindow(LocalDate start, LocalDate end) {
+            return scheduleWindows.computeIfAbsent(new Window(start, end),
+                    window -> AdminDashboardKpiService.this.shiftsInWindow(window.start(), window.end()));
+        }
+
+        List<CallHistory> callsInWindow(LocalDate start, LocalDate end) {
+            return callWindows.computeIfAbsent(new Window(start, end), window -> calls.findByStartedAtBetween(
+                    window.start().atStartOfDay(ZONE).toInstant(), window.end().atStartOfDay(ZONE).toInstant()));
+        }
+
+        long count(String key, Supplier<Long> query) {
+            return counts.computeIfAbsent(key, ignored -> query.get());
+        }
     }
 
     private java.util.List<ScheduleShift> shiftsInWindow(LocalDate start, LocalDate end) {
@@ -198,10 +227,8 @@ public class AdminDashboardKpiService {
         return total > 0 ? (double) part / total : 0;
     }
 
-    private double callMetric(String key, LocalDate start, LocalDate end) {
-        var from = start.atStartOfDay(ZONE).toInstant();
-        var to = end.atStartOfDay(ZONE).toInstant();
-        var window = calls.findByStartedAtBetween(from, to);
+    private double callMetric(String key, LocalDate start, LocalDate end, RequestData data) {
+        var window = data.callsInWindow(start, end);
         long completed = window.stream().filter(c -> "COMPLETED".equals(c.getOutcome())).count();
         return switch (key) {
             case "calls.completed" -> (double) completed;
