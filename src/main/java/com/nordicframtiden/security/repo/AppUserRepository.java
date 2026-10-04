@@ -19,6 +19,8 @@ public interface AppUserRepository extends JpaRepository<AppUser, Long> {
 
   boolean existsByUsername(String username);
 
+  long countByEnabledTrue();
+
   @Query("select u from AppUser u join u.roles r where r = com.nordicframtiden.security.model.Role.ADMIN")
   List<AppUser> findAllAdmins();
 

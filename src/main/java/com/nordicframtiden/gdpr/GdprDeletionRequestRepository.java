@@ -8,6 +8,9 @@ public interface GdprDeletionRequestRepository extends JpaRepository<GdprDeletio
 
   List<GdprDeletionRequest> findTop50ByOrderByCreatedAtDesc();
 
+  /** Admin dashboard aggregate: open (pending) deletion requests. */
+  long countByStatus(String status);
+
   List<GdprDeletionRequest> findByUserIdOrderByCreatedAtDesc(Long userId);
 
   /** Queue for the execution job. */

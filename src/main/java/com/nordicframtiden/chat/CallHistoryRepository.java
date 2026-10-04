@@ -21,5 +21,8 @@ public interface CallHistoryRepository extends JpaRepository<CallHistory, UUID> 
   /** All calls the account placed — GDPR data export. */
   List<CallHistory> findByCaller(com.nordicframtiden.security.model.AppUser caller);
 
+  /** Aggregate window queries for the admin dashboard KPIs. */
+  List<CallHistory> findByStartedAtBetween(java.time.Instant from, java.time.Instant to);
+
   void deleteByCaller(com.nordicframtiden.security.model.AppUser caller);
 }

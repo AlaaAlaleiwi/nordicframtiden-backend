@@ -11,6 +11,8 @@ public interface AvailabilityRequestRepository extends JpaRepository<Availabilit
 
   List<AvailabilityRequest> findByUserIdOrderByCreatedAtDesc(Long userId);
 
+  long countByStatus(AvailabilityRequest.Status status);
+
   @Query("select r from AvailabilityRequest r order by r.createdAt desc")
   List<AvailabilityRequest> findAllOrderByCreatedAtDesc();
 
