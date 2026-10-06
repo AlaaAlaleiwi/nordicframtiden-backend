@@ -273,7 +273,7 @@ class SalariesControllerSecurityTest {
         UserProfile profile = new UserProfile();
         profile.setFullName("Staff Person");
         profile.setHourlyCost(new BigDecimal("200"));
-        when(profileRepo.findByUserId(42L)).thenReturn(Optional.of(profile));
+        when(profileRepo.findSummariesByUserIdIn(List.of(42L))).thenReturn(List.of(profileSummary(42L, "Staff Person", new BigDecimal("200"), "HOURLY", null)));
 
         // One saved payslip adjustment field: +500 kr bonus for the same month.
         com.nordicframtiden.service.model.SalaryAdjustment bonus =
@@ -318,7 +318,7 @@ class SalariesControllerSecurityTest {
         UserProfile profile = new UserProfile();
         profile.setFullName("Pharmacist Person");
         profile.setHourlyCost(new BigDecimal("200"));
-        when(profileRepo.findByUserId(42L)).thenReturn(Optional.of(profile));
+        when(profileRepo.findSummariesByUserIdIn(List.of(42L))).thenReturn(List.of(profileSummary(42L, "Pharmacist Person", new BigDecimal("200"), "HOURLY", null)));
         when(adjustmentService.forMonth(2026, 8)).thenReturn(List.of());
 
         mvc.perform(get("/api/salaries/month")
@@ -328,6 +328,9 @@ class SalariesControllerSecurityTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$[0].users[0].totalCost").value(4000.00))
             .andExpect(jsonPath("$[0].totalCost").value(4000.00));
+
+        verify(profileRepo).findSummariesByUserIdIn(List.of(42L));
+        verify(profileRepo, never()).findByUserId(42L);
     }
 
     @Test
@@ -343,6 +346,7 @@ class SalariesControllerSecurityTest {
         UserProfile profile = new UserProfile();
         profile.setFullName("Adjustment Only Employee");
         when(profileRepo.findByUserId(43L)).thenReturn(Optional.of(profile));
+        when(userRepo.findById(43L)).thenReturn(Optional.of(user));
         com.nordicframtiden.service.model.SalaryAdjustment bonus =
             new com.nordicframtiden.service.model.SalaryAdjustment();
         bonus.setUserId(43L);
@@ -380,7 +384,7 @@ class SalariesControllerSecurityTest {
         UserProfile profile = new UserProfile();
         profile.setFullName("Staff Person");
         profile.setHourlyCost(new BigDecimal("200"));
-        when(profileRepo.findByUserId(42L)).thenReturn(Optional.of(profile));
+        when(profileRepo.findSummariesByUserIdIn(List.of(42L))).thenReturn(List.of(profileSummary(42L, "Staff Person", new BigDecimal("200"), "HOURLY", null)));
         when(adjustmentService.forMonth(2026, 8)).thenReturn(List.of());
 
         mvc.perform(get("/api/salaries/month")
@@ -450,6 +454,17 @@ class SalariesControllerSecurityTest {
             .andExpect(jsonPath("$.reason").value("ZERO_SALARY"));
 
         verify(emailService, never()).sendSalaryPdfEmail(any(), any(), any(), any());
+    }
+
+    private static UserProfileRepository.UserProfileSummary profileSummary(
+            Long userId, String fullName, BigDecimal hourlyCost, String payType, BigDecimal monthlySalary) {
+        return new UserProfileRepository.UserProfileSummary() {
+            @Override public Long getUserId() { return userId; }
+            @Override public String getFullName() { return fullName; }
+            @Override public BigDecimal getHourlyCost() { return hourlyCost; }
+            @Override public String getPayType() { return payType; }
+            @Override public BigDecimal getMonthlySalary() { return monthlySalary; }
+        };
     }
 
     private static NetSalaryResponse payslip(long userId) {

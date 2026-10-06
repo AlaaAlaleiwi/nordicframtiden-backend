@@ -266,11 +266,23 @@ public NetSalaryResponse payslipForStaff(
       @RequestParam OffsetDateTime end,
       @RequestParam(defaultValue = "USER") String role
   ) {
-    List<ShiftLine> lines = "STAFF".equalsIgnoreCase(role)
-        ? staffShiftRepo.findInRange(start, end, null).stream().map(this::toStaffLine).toList()
-        : shiftRepo.findInRange(start, end, null, null).stream().map(this::toUserLine).toList();
+    List<ShiftLine> lines;
+    Map<Long, UserProfileRepository.UserProfileSummary> profilesByUserId;
+    if ("STAFF".equalsIgnoreCase(role)) {
+      var shifts = staffShiftRepo.findInRange(start, end, null);
+      profilesByUserId = profilesForUsers(shifts.stream().map(shift -> shift.getUser().getId()).toList());
+      lines = shifts.stream()
+          .map(shift -> toStaffLine(shift, profilesByUserId.get(shift.getUser().getId())))
+          .toList();
+    } else {
+      var shifts = shiftRepo.findInRange(start, end, null, null);
+      profilesByUserId = profilesForUsers(shifts.stream().map(shift -> shift.getUser().getId()).toList());
+      lines = shifts.stream()
+          .map(shift -> toUserLine(shift, profilesByUserId.get(shift.getUser().getId())))
+          .toList();
+    }
 
-    List<PharmacySummary> summaries = summarizeByPharmacy(lines);
+    List<PharmacySummary> summaries = summarizeByPharmacy(lines, profilesByUserId);
 
     // Payslip adjustment fields (bonuses, one-time pay, tax-free
     // reimbursements) are part of the month's employer cost but live outside
@@ -311,15 +323,12 @@ public NetSalaryResponse payslipForStaff(
   private List<PharmacySummary> withMonthlySalaries(List<PharmacySummary> summaries, String role) {
     boolean staff = "STAFF".equalsIgnoreCase(role);
     List<UserSummary> monthlyRows = new ArrayList<>();
-    for (UserProfile p : profileRepo.findAll()) {
-      if (p.getUser() == null || p.getMonthlySalary() == null) continue;
-      if (!"MONTHLY".equalsIgnoreCase(p.getPayType())) continue;
-      Long userId = p.getUser().getId();
-      if (!hasRole(userId, staff ? Role.STAFF : Role.USER)) continue;
-      String name = (p.getFullName() != null && !p.getFullName().isBlank())
-          ? p.getFullName() : "user-" + userId;
-      monthlyRows.add(new UserSummary(userId, name, 0, null, "MONTHLY", p.getMonthlySalary(),
-          p.getMonthlySalary()));
+    for (var profile : profileRepo.findMonthlySalaryProfilesByRole(staff ? Role.STAFF : Role.USER)) {
+      Long userId = profile.getUserId();
+      String name = (profile.getFullName() != null && !profile.getFullName().isBlank())
+          ? profile.getFullName() : "user-" + userId;
+      monthlyRows.add(new UserSummary(userId, name, 0, null, "MONTHLY", profile.getMonthlySalary(),
+          profile.getMonthlySalary()));
     }
     if (monthlyRows.isEmpty()) return summaries;
 
@@ -655,10 +664,31 @@ public NetSalaryResponse payslipForStaff(
         .getId();
   }
 
+  private Map<Long, UserProfileRepository.UserProfileSummary> profilesForUsers(List<Long> userIds) {
+    List<Long> uniqueUserIds = userIds.stream().distinct().toList();
+    if (uniqueUserIds.isEmpty()) return Map.of();
+    return profileRepo.findSummariesByUserIdIn(uniqueUserIds).stream()
+        .collect(Collectors.toMap(UserProfileRepository.UserProfileSummary::getUserId, profile -> profile));
+  }
+
   private ShiftLine toUserLine(ScheduleShift s) {
+    var profile = profileRepo.findByUserId(s.getUser().getId()).orElse(null);
+    return toUserLine(s, profile == null ? null : summaryOf(profile));
+  }
+
+  private UserProfileRepository.UserProfileSummary summaryOf(UserProfile profile) {
+    return new UserProfileRepository.UserProfileSummary() {
+      @Override public Long getUserId() { return profile.getUser().getId(); }
+      @Override public String getFullName() { return profile.getFullName(); }
+      @Override public BigDecimal getHourlyCost() { return profile.getHourlyCost(); }
+      @Override public String getPayType() { return profile.getPayType(); }
+      @Override public BigDecimal getMonthlySalary() { return profile.getMonthlySalary(); }
+    };
+  }
+
+  private ShiftLine toUserLine(ScheduleShift s, UserProfileRepository.UserProfileSummary profile) {
     var p = s.getPharmacy();
     var u = s.getUser();
-    var profile = profileRepo.findByUserId(u.getId()).orElse(null);
 
     BigDecimal hourly = s.getHourlyCostSnapshot() != null
         ? s.getHourlyCostSnapshot()
@@ -680,8 +710,12 @@ public NetSalaryResponse payslipForStaff(
   }
 
   private ShiftLine toStaffLine(StaffShift s) {
+    var profile = profileRepo.findByUserId(s.getUser().getId()).orElse(null);
+    return toStaffLine(s, profile == null ? null : summaryOf(profile));
+  }
+
+  private ShiftLine toStaffLine(StaffShift s, UserProfileRepository.UserProfileSummary profile) {
     var u = s.getUser();
-    var profile = profileRepo.findByUserId(u.getId()).orElse(null);
 
     BigDecimal hourly = (profile != null && profile.getHourlyCost() != null)
         ? profile.getHourlyCost()
@@ -727,7 +761,8 @@ public NetSalaryResponse payslipForStaff(
     return gross;
   }
 
-  private List<PharmacySummary> summarizeByPharmacy(List<ShiftLine> lines) {
+  private List<PharmacySummary> summarizeByPharmacy(
+      List<ShiftLine> lines, Map<Long, UserProfileRepository.UserProfileSummary> profilesByUserId) {
     Map<Long, List<ShiftLine>> byPharmacy = lines.stream()
         .collect(Collectors.groupingBy(ShiftLine::pharmacyId));
 
@@ -756,7 +791,7 @@ public NetSalaryResponse payslipForStaff(
             ? cost.divide(BigDecimal.valueOf(hours), 2, RoundingMode.HALF_UP)
             : BigDecimal.ZERO;
 
-        var profile = profileRepo.findByUserId(ue.getKey()).orElse(null);
+        var profile = profilesByUserId.get(ue.getKey());
         users.add(new UserSummary(ue.getKey(), fullName, hours, hourly,
             profile != null ? profile.getPayType() : null,
             profile != null ? profile.getMonthlySalary() : null,

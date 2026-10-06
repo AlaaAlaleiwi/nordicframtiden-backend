@@ -13,6 +13,8 @@ import org.springframework.web.bind.annotation.*;
 
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/schedules")
@@ -63,24 +65,10 @@ public class ScheduleController {
       @RequestParam OffsetDateTime end,
       Authentication auth) {
 
-    var res = service
-        .listForCurrentUser(auth, start, end)
-        .stream()
-        .map(s -> {
-          Long pid = s.getPharmacy() == null ? null : s.getPharmacy().getId();
-          String pname = s.getPharmacy() == null ? null : s.getPharmacy().getName();
-          var u = userProfileRepository.findByUserId(s.getUser().getId());
-          return new EventDto(
-              s.getId(),
-              pid,
-              pname,
-              s.getUser().getId(),
-              u.get().getFullName(),
-              s.getStartAt(),
-              s.getEndAt(),
-              s.getNote());
-
-        })
+    var schedules = service.listForCurrentUser(auth, start, end);
+    var profilesByUserId = loadProfilesByUserId(schedules);
+    var res = schedules.stream()
+        .map(s -> toEventDto(s, profilesByUserId))
         .toList();
 
     return org.springframework.http.ResponseEntity.ok()
@@ -94,22 +82,34 @@ public class ScheduleController {
       @RequestParam OffsetDateTime end,
       @RequestParam(required = false) Long pharmacyId,
       @RequestParam(required = false) Long userId) {
-    return service.listRange(start, end, pharmacyId, userId)
-        .stream().map(s -> {
-          Long pid = s.getPharmacy() == null ? null : s.getPharmacy().getId();
-          String pname = s.getPharmacy() == null ? null : s.getPharmacy().getName();
-          var u = userProfileRepository.findByUserId(s.getUser().getId());
-          return new EventDto(
-              s.getId(),
-              pid,
-              pname,
-              s.getUser().getId(),
-              u.get().getFullName(),
-              s.getStartAt(),
-              s.getEndAt(),
-              s.getNote());
+    var schedules = service.listRange(start, end, pharmacyId, userId);
+    var profilesByUserId = loadProfilesByUserId(schedules);
+    return schedules.stream()
+        .map(s -> toEventDto(s, profilesByUserId))
+        .toList();
+  }
 
-        }).toList();
+  private Map<Long, UserProfileRepository.UserProfileSummary> loadProfilesByUserId(
+      List<ScheduleShift> schedules) {
+    var userIds = schedules.stream()
+        .map(schedule -> schedule.getUser().getId())
+        .distinct()
+        .toList();
+    if (userIds.isEmpty()) return Map.of();
+    return userProfileRepository.findSummariesByUserIdIn(userIds).stream()
+        .collect(Collectors.toMap(UserProfileRepository.UserProfileSummary::getUserId, profile -> profile));
+  }
+
+  private EventDto toEventDto(
+      ScheduleShift schedule,
+      Map<Long, UserProfileRepository.UserProfileSummary> profilesByUserId) {
+    Long pharmacyId = schedule.getPharmacy() == null ? null : schedule.getPharmacy().getId();
+    String pharmacyName = schedule.getPharmacy() == null ? null : schedule.getPharmacy().getName();
+    Long userId = schedule.getUser().getId();
+    var profile = profilesByUserId.get(userId);
+    String userLabel = profile != null ? profile.getFullName() : schedule.getUser().getUsername();
+    return new EventDto(schedule.getId(), pharmacyId, pharmacyName, userId, userLabel,
+        schedule.getStartAt(), schedule.getEndAt(), schedule.getNote());
   }
 
   public record CreateRequest(
