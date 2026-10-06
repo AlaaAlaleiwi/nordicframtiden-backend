@@ -114,77 +114,32 @@ class ChatControllerDisplayNameTest {
         return user;
     }
 
+    private AppUserRepository.ChatParticipantSummary summary(Long id, String username, String name, Long photo) {
+        return new AppUserRepository.ChatParticipantSummary() {
+            public Long getId() { return id; }
+            public String getUsername() { return username; }
+            public String getDisplayName() { return name; }
+            public Long getPhotoId() { return photo; }
+        };
+    }
+
     @Test
-    void participants_show_full_name_from_admin_profile_for_pure_admins() throws Exception {
-        AppUser viewer = viewer();
-        AppUser pureAdmin = adminUser(); // id 1 in adminUser(), only AdminProfile
-        when(service.current(any())).thenReturn(viewer);
-        when(users.findAll()).thenReturn(List.of(viewer, pureAdmin));
-        // The viewer itself is excluded from the list, so only id 2 is resolved.
-        when(profiles.findByUserId(2L)).thenReturn(Optional.empty());
-        when(adminProfiles.findByUserId(2L)).thenReturn(Optional.of(adminProfile("Alaa Alaleiwi")));
-        when(presence.isOnline(anyString())).thenReturn(false);
-        lenient().when(userService.photoIdOf(2L)).thenReturn(null);
+    void participants_use_one_projection_query_and_preserve_names_photos_and_sorting() throws Exception {
+        when(service.current(any())).thenReturn(viewer());
+        when(users.findChatParticipants(1L)).thenReturn(List.of(
+            summary(3L, "z-user", "Zara", null),
+            summary(2L, "alaa.admin", "Alaa Alaleiwi", 55L)));
+        when(presence.isOnline("alaa.admin")).thenReturn(true);
 
         mvc.perform(get("/api/chat/participants").with(asUser("viewer")))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$[0].displayName").value("Alaa Alaleiwi"))
-            .andExpect(jsonPath("$[0].username").value("alaa.admin"))
-            .andExpect(jsonPath("$[0].photoId").value(org.hamcrest.Matchers.nullValue()));
-    }
-
-    @Test
-    void participants_expose_photo_id_for_chat_avatars() throws Exception {
-        AppUser viewer = viewer();
-        AppUser pharmacist = adminUser();
-        when(service.current(any())).thenReturn(viewer);
-        when(users.findAll()).thenReturn(List.of(viewer, pharmacist));
-        when(profiles.findByUserId(2L)).thenReturn(Optional.empty());
-        when(adminProfiles.findByUserId(2L)).thenReturn(Optional.of(adminProfile("Alaa Alaleiwi")));
-        when(presence.isOnline(anyString())).thenReturn(false);
-        when(userService.photoIdOf(2L)).thenReturn(55L);
-
-        mvc.perform(get("/api/chat/participants").with(asUser("viewer")))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$[0].photoId").value(55));
-    }
-
-    @Test
-    void participants_still_prefer_user_profile_when_it_exists() throws Exception {
-        AppUser viewer = viewer();
-        AppUser dualRole = new AppUser();
-        dualRole.setId(2L);
-        dualRole.setUsername("dual");
-        dualRole.setEnabled(true);
-        dualRole.setRoles(new java.util.HashSet<>(Set.of(Role.USER, Role.ADMIN)));
-
-        when(service.current(any())).thenReturn(viewer);
-        when(users.findAll()).thenReturn(List.of(viewer, dualRole));
-        // The viewer itself is excluded from the list.
-        when(profiles.findByUserId(2L)).thenReturn(Optional.of(userProfile("Dual User-Profile Name")));
-        // AdminProfile must not override the user profile; the lookup is
-        // short-circuited when the user profile exists, hence lenient.
-        lenient().when(adminProfiles.findByUserId(2L)).thenReturn(Optional.of(adminProfile("Dual Admin-Profile Name")));
-        when(presence.isOnline(anyString())).thenReturn(false);
-
-        mvc.perform(get("/api/chat/participants").with(asUser("viewer")))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$[0].displayName").value("Dual User-Profile Name"));
-    }
-
-    @Test
-    void participants_fall_back_to_username_only_when_no_profile_exists() throws Exception {
-        AppUser viewer = viewer();
-        AppUser profileless = adminUser();
-        when(service.current(any())).thenReturn(viewer);
-        when(users.findAll()).thenReturn(List.of(viewer, profileless));
-        when(profiles.findByUserId(2L)).thenReturn(Optional.empty());
-        when(adminProfiles.findByUserId(2L)).thenReturn(Optional.empty());
-        when(presence.isOnline(anyString())).thenReturn(false);
-
-        mvc.perform(get("/api/chat/participants").with(asUser("viewer")))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$[0].displayName").value("alaa.admin"));
+            .andExpect(jsonPath("$[0].photoId").value(55))
+            .andExpect(jsonPath("$[0].online").value(true))
+            .andExpect(jsonPath("$[1].displayName").value("Zara"));
+        org.mockito.Mockito.verify(users).findChatParticipants(1L);
+        org.mockito.Mockito.verifyNoInteractions(profiles, adminProfiles, userService);
+        org.mockito.Mockito.verify(users, org.mockito.Mockito.never()).findAll();
     }
 
     @Test
@@ -199,15 +154,15 @@ class ChatControllerDisplayNameTest {
 
         when(service.current(any())).thenReturn(viewer);
         when(service.visibleRooms(any())).thenReturn(List.of(direct));
-        when(members.findByRoomId(9L)).thenReturn(List.of(member(direct, viewer), member(direct, pureAdmin)));
-        when(profiles.findByUserId(1L)).thenReturn(Optional.of(userProfile("Viewer Name")));
-        when(profiles.findByUserId(2L)).thenReturn(Optional.empty());
-        when(adminProfiles.findByUserId(2L)).thenReturn(Optional.of(adminProfile("Alaa Alaleiwi")));
-        lenient().when(presence.isOnline(anyString())).thenReturn(false);
-        when(service.unreadCount(9L, 1L)).thenReturn(0L);
+        when(members.findByRoomIdIn(List.of(9L))).thenReturn(List.of(member(direct, viewer), member(direct, pureAdmin)));
+        when(users.findChatParticipantsByIdIn(List.of(1L, 2L))).thenReturn(List.of(
+            summary(1L, "viewer", "Viewer Name", null),
+            summary(2L, "alaa.admin", "Alaa Alaleiwi", null)));
 
         mvc.perform(get("/api/chat/rooms").with(asUser("viewer")).accept(MediaType.APPLICATION_JSON))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$[0].name").value("Alaa Alaleiwi"));
+        org.mockito.Mockito.verifyNoInteractions(profiles, adminProfiles, userService);
+        org.mockito.Mockito.verify(service, org.mockito.Mockito.never()).unreadCount(any(), any());
     }
 }

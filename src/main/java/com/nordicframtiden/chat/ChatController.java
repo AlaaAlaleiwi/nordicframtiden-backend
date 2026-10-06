@@ -76,14 +76,27 @@ public class ChatController {
   @GetMapping("/participants")
   public List<ParticipantDto> participants(Authentication auth) {
     Long me = service.current(auth).getId();
-    return users.findAll().stream().filter(AppUser::isEnabled).filter(user -> !user.getId().equals(me))
+    return users.findChatParticipants(me).stream()
         .map(this::participant).sorted(Comparator.comparing(ParticipantDto::displayName, String.CASE_INSENSITIVE_ORDER)).toList();
   }
 
   @GetMapping("/rooms")
   public List<RoomDto> rooms(Authentication auth) {
     AppUser me = service.current(auth);
-    return service.visibleRooms(auth).stream().map(room -> room(room, me)).toList();
+    List<ChatRoom> visible = service.visibleRooms(auth);
+    if (visible.isEmpty()) return List.of();
+    List<Long> roomIds = visible.stream().map(ChatRoom::getId).toList();
+    List<ChatRoomMember> memberships = members.findByRoomIdIn(roomIds);
+    Map<Long, List<ChatRoomMember>> byRoom = memberships.stream()
+        .collect(Collectors.groupingBy(member -> member.getRoom().getId()));
+    List<Long> userIds = memberships.stream().map(member -> member.getUser().getId()).distinct().toList();
+    Map<Long, ParticipantDto> people = userIds.isEmpty() ? Map.of() : users.findChatParticipantsByIdIn(userIds)
+        .stream().map(this::participant).collect(Collectors.toMap(ParticipantDto::id, person -> person));
+    Map<Long, Long> unread = messages.countUnreadByRoomIds(roomIds, me.getId()).stream()
+        .collect(Collectors.toMap(ChatMessageRepository.RoomUnreadCount::getRoomId,
+            ChatMessageRepository.RoomUnreadCount::getUnreadCount));
+    return visible.stream().map(room -> room(room, me, byRoom.getOrDefault(room.getId(), List.of()),
+        member -> people.get(member.getUser().getId()), unread.getOrDefault(room.getId(), 0L))).toList();
   }
 
   @PostMapping("/channels") @ResponseStatus(HttpStatus.CREATED)
@@ -223,15 +236,21 @@ public class ChatController {
   }
 
   private RoomDto room(ChatRoom room, AppUser me) {
-    List<ParticipantDto> roomParticipants = members.findByRoomId(room.getId()).stream()
-        .map(ChatRoomMember::getUser).map(this::participant).toList();
+    List<ChatRoomMember> memberships = members.findByRoomId(room.getId());
+    boolean isMember = memberships.stream().anyMatch(member -> member.getUser().getId().equals(me.getId()));
+    return room(room, me, memberships, member -> participant(member.getUser()),
+        isMember ? service.unreadCount(room.getId(), me.getId()) : 0);
+  }
+
+  private RoomDto room(ChatRoom room, AppUser me, List<ChatRoomMember> memberships,
+                       java.util.function.Function<ChatRoomMember, ParticipantDto> mapper, long unreadCount) {
+    List<ParticipantDto> roomParticipants = memberships.stream().map(mapper).toList();
     boolean isMember = roomParticipants.stream().anyMatch(person -> person.id().equals(me.getId()));
     String displayName = room.getName();
     if (room.getType() == ChatRoom.Type.DIRECT) {
       displayName = roomParticipants.stream().filter(person -> !person.id().equals(me.getId()))
           .map(ParticipantDto::displayName).findFirst().orElse("Direct message");
     }
-    List<ChatRoomMember> memberships = members.findByRoomId(room.getId());
     List<Long> adminUserIds = memberships.stream().filter(ChatRoomMember::isChannelAdmin)
         .map(member -> member.getUser().getId()).toList();
     boolean owner = room.getType() == ChatRoom.Type.CHANNEL && room.getCreatedBy().getId().equals(me.getId());
@@ -239,7 +258,7 @@ public class ChatController {
         && (owner || adminUserIds.contains(me.getId()));
     return new RoomDto(room.getId(), room.getType().name(), displayName, room.getDescription(),
         room.isPrivateChannel(), isMember, canManage, owner, room.getCreatedBy().getId(),
-        isMember ? service.unreadCount(room.getId(), me.getId()) : 0, roomParticipants, adminUserIds);
+        isMember ? unreadCount : 0, roomParticipants, adminUserIds);
   }
 
   private MessageDto message(ChatMessage message, AppUser me) {
@@ -268,6 +287,11 @@ public class ChatController {
         .or(() -> adminProfiles.findByUserId(user.getId()).map(profile -> profile.getFullName()).filter(name -> !name.isBlank()))
         .orElse(user.getUsername());
     return new ParticipantDto(user.getId(), user.getUsername(), displayName, presence.isOnline(user.getUsername()),
-        userService.photoIdOf(user.getId()));
+        user.getPhotoId());
+  }
+
+  private ParticipantDto participant(AppUserRepository.ChatParticipantSummary user) {
+    return new ParticipantDto(user.getId(), user.getUsername(), user.getDisplayName(),
+        presence.isOnline(user.getUsername()), user.getPhotoId());
   }
 }

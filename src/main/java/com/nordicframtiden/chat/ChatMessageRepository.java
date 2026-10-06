@@ -7,6 +7,21 @@ import org.springframework.data.repository.query.Param;
 import java.util.List;
 
 public interface ChatMessageRepository extends JpaRepository<ChatMessage, Long> {
+  interface RoomUnreadCount {
+    Long getRoomId();
+    long getUnreadCount();
+  }
+
+  @Query(value = """
+      select m.room_id as roomId, count(*) as unreadCount
+      from chat_message m
+      join chat_room_member member on member.room_id = m.room_id and member.user_id = :userId
+      where m.room_id in :roomIds and m.parent_message_id is null
+        and m.id > coalesce(member.last_read_message_id, 0) and m.sender_id <> :userId
+      group by m.room_id
+      """, nativeQuery = true)
+  List<RoomUnreadCount> countUnreadByRoomIds(@Param("roomIds") java.util.Collection<Long> roomIds,
+                                           @Param("userId") Long userId);
   List<ChatMessage> findByRoomIdAndParentIsNullOrderByIdDesc(Long roomId, Pageable pageable);
   List<ChatMessage> findByRoomIdAndParentIsNullAndIdAfterOrderByIdAsc(Long roomId, Long afterId, Pageable pageable);
   List<ChatMessage> findByParentIdOrderByIdAsc(Long parentId);
