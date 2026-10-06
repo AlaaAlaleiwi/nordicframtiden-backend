@@ -2,7 +2,7 @@ package com.nordicframtiden.api;
 
 import com.nordicframtiden.availability.AvailabilityRequest;
 import com.nordicframtiden.availability.AvailabilityService;
-import com.nordicframtiden.security.service.UserService;
+import com.nordicframtiden.availability.AvailabilityRequestRepository.AvailabilityRequestSummary;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
@@ -17,11 +17,9 @@ import java.util.List;
 public class AvailabilityController {
 
   private final AvailabilityService service;
-  private final UserService userService;
 
-  public AvailabilityController(AvailabilityService service, UserService userService) {
+  public AvailabilityController(AvailabilityService service) {
     this.service = service;
-    this.userService = userService;
   }
 
   public record CreateReq(
@@ -63,27 +61,25 @@ public class AvailabilityController {
       String note
   ) {}
 
-  private AvailabilityDto toDto(AvailabilityRequest r) {
-    var u = r.getUser();
-    var detailed = userService.getDetailedById(u.getId());
+  private AvailabilityDto toDto(AvailabilityRequestSummary request) {
     return new AvailabilityDto(
-        r.getId(),
-        u.getId(),
-        detailed.fullName(),
-        u.getUsername(),
-        r.getType().name(),
-        r.getStartDate(),
-        r.getEndDate(),
-        r.getStartTime(),
-        r.getEndTime(),
-        r.getStatus().name(),
-        r.getNote()
-    );
+        request.getId(), request.getUserId(), request.getUserFullName(), request.getUsername(),
+        request.getType().name(), request.getStartDate(), request.getEndDate(), request.getStartTime(),
+        request.getEndTime(), request.getStatus().name(), request.getNote());
+  }
+
+  private AvailabilityRow toRow(AvailabilityRequestSummary request) {
+    return new AvailabilityRow(
+        request.getId(), request.getUserId(), request.getUsername(), request.getUserFullName(),
+        request.getType().name(), request.getStartDate().toString(), request.getEndDate().toString(),
+        request.getStartTime() == null ? null : request.getStartTime().toString(),
+        request.getEndTime() == null ? null : request.getEndTime().toString(),
+        request.getStatus().name(), request.getNote());
   }
 
   @GetMapping("/me")
   public List<AvailabilityDto> my(Authentication auth) {
-    return service.my(auth).stream().map(this::toDto).toList();
+    return service.mySummaries(auth).stream().map(this::toDto).toList();
   }
 
   @PostMapping("/me")
@@ -91,14 +87,14 @@ public class AvailabilityController {
   public AvailabilityDto create(Authentication auth, @RequestBody CreateReq req) {
     var type = AvailabilityRequest.Type.valueOf(req.type());
     var created = service.createForMe(auth, type, req.startDate(), req.endDate(), req.startTime(), req.endTime(), req.note());
-    return toDto(created);
+    return toDto(service.summaryById(created.getId()));
   }
 
   @GetMapping
   @PreAuthorize("hasRole('ADMIN') or hasAuthority('PERM_AVAILABILITY')")
  
   public List<AvailabilityDto> all() {
-    return service.all().stream().map(this::toDto).toList();
+    return service.allSummaries().stream().map(this::toDto).toList();
   }
 
   @PatchMapping("/{id}/status")
@@ -113,6 +109,6 @@ public class AvailabilityController {
  
   public List<AvailabilityRow> range(@RequestParam LocalDate start, @RequestParam LocalDate end,
       @RequestParam(required = false) String statuses) {
-    return service.getOverlapping(start, end, statuses);
+    return service.getOverlappingSummaries(start, end, statuses).stream().map(this::toRow).toList();
   }
 }

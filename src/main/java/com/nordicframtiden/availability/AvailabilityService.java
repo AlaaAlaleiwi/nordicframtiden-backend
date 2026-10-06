@@ -18,6 +18,7 @@ public class AvailabilityService {
   private final AppUserRepository userRepo;
   private final UserProfileRepository profileRepo;
 
+
   public AvailabilityService(
       AvailabilityRequestRepository repo,
       AppUserRepository userRepo,
@@ -32,6 +33,24 @@ public class AvailabilityService {
     var user = userRepo.findByUsername(auth.getName())
         .orElseThrow(() -> new IllegalArgumentException("User not found"));
     return repo.findByUserIdOrderByCreatedAtDesc(user.getId());
+  }
+
+  @Transactional(readOnly = true)
+  public List<AvailabilityRequestRepository.AvailabilityRequestSummary> mySummaries(Authentication auth) {
+    var user = userRepo.findByUsername(auth.getName())
+        .orElseThrow(() -> new IllegalArgumentException("User not found"));
+    return repo.findSummariesByUserIdOrderByCreatedAtDesc(user.getId());
+  }
+
+  @Transactional(readOnly = true)
+  public List<AvailabilityRequestRepository.AvailabilityRequestSummary> allSummaries() {
+    return repo.findAllSummariesOrderByCreatedAtDesc();
+  }
+
+  @Transactional(readOnly = true)
+  public AvailabilityRequestRepository.AvailabilityRequestSummary summaryById(Long id) {
+    return repo.findSummaryById(id)
+        .orElseThrow(() -> new IllegalArgumentException("Request not found"));
   }
 
   @Transactional
@@ -77,6 +96,15 @@ public class AvailabilityService {
     var r = repo.findById(id).orElseThrow(() -> new IllegalArgumentException("Request not found"));
     r.setStatus(status);
     return repo.save(r);
+  }
+
+  @Transactional(readOnly = true)
+  public List<AvailabilityRequestRepository.AvailabilityRequestSummary> getOverlappingSummaries(LocalDate start, LocalDate end, String statusesCsv) {
+    List<AvailabilityRequest.Status> statuses = parseStatuses(statusesCsv);
+    if (statuses != null && statuses.isEmpty()) return List.of();
+    return statuses == null
+        ? repo.findApprovedOverlappingSummaries(start, end)
+        : repo.findByStatusInAndOverlappingSummaries(statuses, start, end);
   }
 
   @Transactional(readOnly = true)
