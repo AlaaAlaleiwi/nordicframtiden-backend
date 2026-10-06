@@ -129,7 +129,7 @@ class ChatControllerDisplayNameTest {
         when(users.findChatParticipants(1L)).thenReturn(List.of(
             summary(3L, "z-user", "Zara", null),
             summary(2L, "alaa.admin", "Alaa Alaleiwi", 55L)));
-        when(presence.isOnline("alaa.admin")).thenReturn(true);
+        when(presence.isOnline(anyString())).thenAnswer(invocation -> "alaa.admin".equals(invocation.getArgument(0)));
 
         mvc.perform(get("/api/chat/participants").with(asUser("viewer")))
             .andExpect(status().isOk())
