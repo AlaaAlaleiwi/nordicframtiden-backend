@@ -165,4 +165,53 @@ class ChatControllerDisplayNameTest {
         org.mockito.Mockito.verifyNoInteractions(profiles, adminProfiles, userService);
         org.mockito.Mockito.verify(service, org.mockito.Mockito.never()).unreadCount(any(), any());
     }
+
+    @Test
+    void room_list_batches_queries_and_preserves_unread_and_channel_permissions() {
+        AppUser viewer = viewer();
+        AppUser admin = adminUser();
+        ChatRoom joined = new ChatRoom();
+        joined.setId(9L);
+        joined.setType(ChatRoom.Type.CHANNEL);
+        joined.setName("Joined");
+        joined.setCreatedBy(admin);
+        ChatRoom available = new ChatRoom();
+        available.setId(10L);
+        available.setType(ChatRoom.Type.CHANNEL);
+        available.setName("Available");
+        available.setCreatedBy(admin);
+        var membership = member(joined, viewer);
+        membership.setChannelAdmin(true);
+        when(service.current(any())).thenReturn(viewer);
+        when(service.visibleRooms(any())).thenReturn(List.of(joined, available));
+        when(members.findByRoomIdIn(List.of(9L, 10L))).thenReturn(List.of(membership, member(joined, admin), member(available, admin)));
+        when(users.findChatParticipantsByIdIn(List.of(1L, 2L))).thenReturn(List.of(
+            summary(1L, "viewer", "Viewer", null), summary(2L, "admin", "Admin", null)));
+        when(messages.countUnreadByRoomIds(List.of(9L, 10L), 1L)).thenReturn(List.of(new ChatMessageRepository.RoomUnreadCount() {
+            public Long getRoomId() { return 9L; }
+            public long getUnreadCount() { return 7; }
+        }));
+
+        var result = controller.rooms(new UsernamePasswordAuthenticationToken("viewer", "unused"));
+        org.assertj.core.api.Assertions.assertThat(result.get(0).member()).isTrue();
+        org.assertj.core.api.Assertions.assertThat(result.get(0).canManage()).isTrue();
+        org.assertj.core.api.Assertions.assertThat(result.get(0).owner()).isFalse();
+        org.assertj.core.api.Assertions.assertThat(result.get(0).unreadCount()).isEqualTo(7);
+        org.assertj.core.api.Assertions.assertThat(result.get(1).member()).isFalse();
+        org.assertj.core.api.Assertions.assertThat(result.get(1).canManage()).isFalse();
+        org.assertj.core.api.Assertions.assertThat(result.get(1).unreadCount()).isZero();
+        org.mockito.Mockito.verify(members).findByRoomIdIn(List.of(9L, 10L));
+        org.mockito.Mockito.verify(users).findChatParticipantsByIdIn(List.of(1L, 2L));
+        org.mockito.Mockito.verify(messages).countUnreadByRoomIds(List.of(9L, 10L), 1L);
+        org.mockito.Mockito.verifyNoInteractions(profiles, adminProfiles, userService);
+        org.mockito.Mockito.verify(service, org.mockito.Mockito.never()).unreadCount(any(), any());
+    }
+
+    @Test
+    void empty_room_list_skips_batch_queries() {
+        when(service.current(any())).thenReturn(viewer());
+        when(service.visibleRooms(any())).thenReturn(List.of());
+        org.assertj.core.api.Assertions.assertThat(controller.rooms(new UsernamePasswordAuthenticationToken("viewer", "unused"))).isEmpty();
+        org.mockito.Mockito.verifyNoInteractions(members, messages, users, profiles, adminProfiles);
+    }
 }

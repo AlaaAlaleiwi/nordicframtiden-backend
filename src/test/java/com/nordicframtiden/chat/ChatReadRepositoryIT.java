@@ -52,7 +52,11 @@ class ChatReadRepositoryIT {
     profile(admin, "Admin only", true);
     profile(blank, "   ", false);
     profile(blank, "Blank fallback", true);
-    jdbc.update("update app_user set photo_id=55 where id=?", dual);
+    Long photo = jdbc.queryForObject("""
+        insert into profile_document(user_id,file_name,content_type,size_bytes,iv,data)
+        values (?,'photo.png','image/png',1,decode('00','hex'),decode('00','hex')) returning id
+        """, Long.class, dual);
+    jdbc.update("update app_user set photo_id=? where id=?", photo, dual);
     var stats = entityManager.getEntityManagerFactory().unwrap(SessionFactory.class).getStatistics();
     stats.clear();
 
@@ -64,7 +68,7 @@ class ChatReadRepositoryIT {
     assertThat(rows.stream().filter(row -> row.getId().equals(dual)).findFirst().orElseThrow().getDisplayName())
         .isEqualTo("User name");
     assertThat(rows.stream().filter(row -> row.getId().equals(dual)).findFirst().orElseThrow().getPhotoId())
-        .isEqualTo(55L);
+        .isEqualTo(photo);
     assertThat(rows.stream().filter(row -> row.getId().equals(admin)).findFirst().orElseThrow().getDisplayName())
         .isEqualTo("Admin only");
     assertThat(rows.stream().filter(row -> row.getId().equals(blank)).findFirst().orElseThrow().getDisplayName())
