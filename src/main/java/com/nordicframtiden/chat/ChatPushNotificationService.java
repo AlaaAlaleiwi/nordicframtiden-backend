@@ -56,38 +56,6 @@ public class ChatPushNotificationService {
   }
 
   @Transactional(readOnly = true)
-  public void notifyIncomingCall(Set<String> usernames, String caller, String callId, long roomId) {
-    notifyIncomingCall(usernames, caller, callId, roomId, false);
-  }
-
-  @Transactional(readOnly = true)
-  public void notifyIncomingCall(Set<String> usernames, String caller, String callId, long roomId,
-                                 boolean video) {
-    if (usernames.isEmpty()) return;
-    // Full name from the user profile, then the admin profile (pure admins
-    // have no user profile) — never show a raw username if avoidable.
-    String callerName = users.findByUsername(caller)
-        .flatMap(user -> profiles.findByUserId(user.getId())
-            .map(profile -> profile.getFullName())
-            .filter(name -> !name.isBlank())
-            .or(() -> adminProfiles.findByUserId(user.getId())
-                .map(profile -> profile.getFullName())
-                .filter(name -> !name.isBlank())))
-        .filter(name -> !name.isBlank())
-        .orElse(caller);
-    var data = Map.of(
-        "title", video ? "Incoming video call" : "Incoming audio call",
-        "body", callerName + " is calling",
-        "url", "/chat",
-        "type", "call.invite",
-        "isVideo", Boolean.toString(video),
-        "callId", callId,
-        "roomId", Long.toString(roomId));
-    subscriptions.findByUserUsernameIn(usernames)
-        .forEach(subscription -> sender.send(subscription.getFirebaseInstallationId(), data));
-  }
-
-  @Transactional(readOnly = true)
   public void notifyChannelDeleted(Set<String> usernames, String channelName) {
     if (usernames.isEmpty()) return;
     var data = Map.of(

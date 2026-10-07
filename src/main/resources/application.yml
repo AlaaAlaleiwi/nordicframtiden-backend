@@ -58,12 +58,6 @@ app:
       client-secret: ${SKATTEVERKET_TAX_CLIENT_SECRET:}
       timeout-seconds: ${SKATTEVERKET_TAX_TIMEOUT_SECONDS:10}
 
-calls:
-  ice:
-    turn-urls: ${CALL_TURN_URLS:}
-    turn-username: ${CALL_TURN_USERNAME:}
-    turn-credential: ${CALL_TURN_CREDENTIAL:}
-
 server:
   # Cloud Run injects PORT. Keep 8080 as the local/default container port.
   port: ${PORT:8080}

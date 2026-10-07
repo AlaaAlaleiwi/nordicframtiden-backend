@@ -19,18 +19,15 @@ import java.util.concurrent.TimeUnit;
 public class ChatWebSocketHandler extends TextWebSocketHandler implements ChatEventPublisher, ChatPresence {
   private final ObjectMapper objectMapper;
   private final ChatRoomMemberRepository members;
-  private final CallSignalingRouter callRouter;
   private final Map<String, Set<WebSocketSession>> sessions = new ConcurrentHashMap<>();
   // Prunes silently-dead sockets (sleep/wake, crashes, network switches).
-  // Without this, call signals and presence events are routed into dead
+  // Without this, chat presence events are routed into dead
   // sessions and never reach the (reconnected) client.
   private final ScheduledExecutorService livenessPinger = Executors.newSingleThreadScheduledExecutor();
 
-  public ChatWebSocketHandler(ObjectMapper objectMapper, ChatRoomMemberRepository members,
-                              CallSignalingRouter callRouter) {
+  public ChatWebSocketHandler(ObjectMapper objectMapper, ChatRoomMemberRepository members) {
     this.objectMapper = objectMapper;
     this.members = members;
-    this.callRouter = callRouter;
   }
 
   @PostConstruct
@@ -83,9 +80,6 @@ public class ChatWebSocketHandler extends TextWebSocketHandler implements ChatEv
     userSessions.remove(session);
     if (!userSessions.isEmpty()) return;
     sessions.remove(username);
-    for (var route : callRouter.disconnected(username)) {
-      sendTo(route.recipients(), route.event());
-    }
     broadcastPresence(username, false);
   }
 
@@ -98,33 +92,14 @@ public class ChatWebSocketHandler extends TextWebSocketHandler implements ChatEv
   protected void handleTextMessage(WebSocketSession session, TextMessage message) {
     if (session.getPrincipal() == null) return;
     try {
-      var route = callRouter.route(
-          session.getPrincipal().getName(),
-          objectMapper.readTree(message.getPayload()));
-      sendTo(route.recipients(), route.event());
-    } catch (RuntimeException | IOException error) {
-      sendTo(
-          Set.of(session.getPrincipal().getName()),
-          Map.of("type", "call.error", "message", error.getMessage()));
+      if (objectMapper.readTree(message.getPayload()).path("type").asText().startsWith("call.")) {
+        sendTo(Set.of(session.getPrincipal().getName()),
+            Map.of("type", "error", "code", "callsRemoved", "message", "Audio and video calls are no longer available."));
+      }
+    } catch (IOException ignored) {
+      // Chat writes use authenticated REST endpoints; unsupported socket
+      // frames never trigger mutations or forwarding to other participants.
     }
-  }
-
-  void routeCallSignal(String username, com.fasterxml.jackson.databind.JsonNode signal) {
-    try {
-      var route = callRouter.route(username, signal);
-      sendTo(route.recipients(), route.event());
-    } catch (RuntimeException error) {
-      sendTo(Set.of(username), Map.of("type", "call.error", "message", error.getMessage()));
-      throw error;
-    }
-  }
-
-  java.util.List<CallSignalingRouter.ActiveChannelCall> activeChannelCalls(String username) {
-    return callRouter.activeChannelCalls(username);
-  }
-
-  java.util.Map<String, CallSignalingRouter.UserCallState> activeCallStates(String username) {
-    return callRouter.activeCallStates(username);
   }
 
   @Override
