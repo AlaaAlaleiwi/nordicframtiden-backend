@@ -107,6 +107,11 @@ public class StaffScheduleService {
       throw new com.nordicframtiden.pharmacy.ShiftLockedException(
           com.nordicframtiden.pharmacy.ShiftLockPolicy.lockedMessage(s.getStartAt()));
     }
+    // Moving a shift into the past is a history edit too.
+    if (com.nordicframtiden.pharmacy.ShiftLockPolicy.isLocked(startAt, today())) {
+      throw new com.nordicframtiden.pharmacy.ShiftLockedException(
+          com.nordicframtiden.pharmacy.ShiftLockPolicy.pastCreationMessage(startAt));
+    }
 
     if (deletionPolicy != null && (userId != null || startAt != null)) {
       deletionPolicy.assertShiftsAllowed(

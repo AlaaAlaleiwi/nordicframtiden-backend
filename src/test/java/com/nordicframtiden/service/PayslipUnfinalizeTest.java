@@ -107,9 +107,12 @@ class PayslipUnfinalizeTest {
     PayslipFreezeService service = serviceAt("2026-09-15T10:00:00Z"); // Aug window open
     PayslipSnapshot userSnapshot = new PayslipSnapshot();
     ReflectionTestUtils.setField(userSnapshot, "id", 42L);
-    // First lookup pair: the reopen pass (snapshot present → deleted).
+    // Lookups: corrections check, reopen pass (snapshot present → deleted),
+    // then the draft check.
     when(snapshots.findByUserIdAndYearAndMonthAndRole(7L, 2026, 8, "USER"))
-        .thenReturn(Optional.of(userSnapshot), Optional.empty());
+        .thenReturn(Optional.of(userSnapshot), Optional.of(userSnapshot), Optional.empty());
+    when(revisions.findTopBySnapshotIdOrderByRevisionDesc(42L))
+        .thenReturn(Optional.of(new PayslipRevision(42L, 1, "admin", "Finalized", null, "{}")));
     when(snapshots.findByUserIdAndYearAndMonthAndRole(7L, 2026, 8, "STAFF"))
         .thenReturn(Optional.empty());
     when(payroll.netSalaryForUserMonth(7L, 2026, 8)).thenReturn(original());
@@ -120,6 +123,27 @@ class PayslipUnfinalizeTest {
     verify(snapshots).delete(userSnapshot);
     verify(adjustments).replace(org.mockito.ArgumentMatchers.eq(7L), org.mockito.ArgumentMatchers.eq(2026),
         org.mockito.ArgumentMatchers.eq(8), any());
+  }
+
+  @Test
+  void savingAdjustmentsNeverErasesCorrectionHistory() {
+    // A finalized payslip with correction r2 carries deliberate audit records;
+    // saving adjustments must not silently delete them.
+    PayslipFreezeService service = serviceAt("2026-09-15T10:00:00Z"); // Aug window open
+    PayslipSnapshot snapshot = new PayslipSnapshot();
+    ReflectionTestUtils.setField(snapshot, "id", 42L);
+    when(snapshots.findByUserIdAndYearAndMonthAndRole(7L, 2026, 8, "USER"))
+        .thenReturn(Optional.of(snapshot));
+    when(revisions.findTopBySnapshotIdOrderByRevisionDesc(42L))
+        .thenReturn(Optional.of(new PayslipRevision(42L, 2, "admin", "Missed bonus", "{}", "{}")));
+
+    assertThatThrownBy(() -> service.saveAdjustments(7L, 2026, 8, "USER", List.of()))
+        .isInstanceOf(PayslipConflictException.class)
+        .hasMessageContaining("correction");
+    verify(snapshots, never()).delete(any(PayslipSnapshot.class));
+    verify(revisions, never()).deleteAllBySnapshotId(any());
+    verify(adjustments, never()).replace(any(), org.mockito.ArgumentMatchers.anyInt(),
+        org.mockito.ArgumentMatchers.anyInt(), any());
   }
 
   @Test

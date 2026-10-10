@@ -92,6 +92,7 @@ public NetSalaryResponse previewForUserMonth(Long userId, int year, int month, S
     for (var s : staffScheduleService.listForUser(userId, range.start(), range.end())) {
       Instant start = s.getStartAt().toInstant();
       Instant end = s.getEndAt().toInstant();
+      if (!startsIn(range, start)) continue;
       totalHours = totalHours.add(hoursBetween(start, end));
       if (!isMonthly(profile)) pay = pay.add(shiftPay(start, end, hourlyCost));
     }
@@ -99,6 +100,7 @@ public NetSalaryResponse previewForUserMonth(Long userId, int year, int month, S
     for (var s : scheduleService.listForUser(userId, range.start(), range.end())) {
       Instant start = s.getStartAt().toInstant();
       Instant end = s.getEndAt().toInstant();
+      if (!startsIn(range, start)) continue;
       totalHours = totalHours.add(hoursBetween(start, end));
       if (!isMonthly(profile)) pay = pay.add(shiftPay(start, end, hourlyCost));
     }
@@ -134,6 +136,7 @@ public NetSalaryResponse netSalaryForStaffMonth(Long userId, int year, int month
   for (var s : shifts) {
     Instant start = s.getStartAt().toInstant();
     Instant end = s.getEndAt().toInstant();
+    if (!startsIn(range, start)) continue;
     totalHours = totalHours.add(hoursBetween(start, end));
     if (!isMonthly(profile)) pay = pay.add(shiftPay(start, end, rate));
   }
@@ -170,6 +173,7 @@ public NetSalaryResponse netSalaryForStaffMonth(Long userId, int year, int month
     for (var s : shifts) {
       Instant start = s.getStartAt().toInstant();
       Instant end = s.getEndAt().toInstant();
+      if (!startsIn(range, start)) continue;
       totalHours = totalHours.add(hoursBetween(start, end));
       if (!isMonthly(profile)) pay = pay.add(shiftPay(start, end, rate));
     }
@@ -234,6 +238,15 @@ public NetSalaryResponse netSalaryForStaffMonth(Long userId, int year, int month
     var start = LocalDate.of(year, month, 1).atStartOfDay(STOCKHOLM).toInstant();
     var end = LocalDate.of(year, month, 1).plusMonths(1).atStartOfDay(STOCKHOLM).toInstant();
     return new UtcRange(start, end);
+  }
+
+  /**
+   * The range query returns every shift that overlaps the month, so a night
+   * shift across a month boundary comes back for both months. A shift belongs
+   * to the month it starts in (Stockholm time) — paid once, in full.
+   */
+  private boolean startsIn(UtcRange range, Instant start) {
+    return start != null && !start.isBefore(range.start()) && start.isBefore(range.end());
   }
 
   private BigDecimal hoursBetween(Instant start, Instant end) {

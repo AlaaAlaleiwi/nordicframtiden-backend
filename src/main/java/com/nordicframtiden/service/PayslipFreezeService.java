@@ -128,6 +128,10 @@ public class PayslipFreezeService {
     // a draft first, so fields stay addable/deletable/savable. Once the
     // window closes, requireEditablePeriod refuses and the freeze stands.
     // Adjustments currently belong to a user/month, shared by USER and STAFF.
+    // Corrections are deliberate audit records: never erase them as a side
+    // effect of saving — that takes an explicit unfinalize.
+    requireNoCorrections(userId, year, month, "USER");
+    requireNoCorrections(userId, year, month, "STAFF");
     reopenWithinEditableWindow(userId, year, month, "USER");
     reopenWithinEditableWindow(userId, year, month, "STAFF");
     requireDraft(userId, year, month, "USER");
@@ -211,6 +215,12 @@ public class PayslipFreezeService {
   private PayslipRevision latest(PayslipSnapshot s) {
     return revisions.findTopBySnapshotIdOrderByRevisionDesc(s.getId())
         .orElseThrow(() -> new PayslipConflictException("Finalized payslip history is missing; restore the stored record"));
+  }
+  private void requireNoCorrections(Long userId, int year, int month, String role) {
+    var existing = snapshot(userId, year, month, role);
+    if (existing.isPresent() && latest(existing.get()).getRevision() > 1)
+      throw new PayslipConflictException(
+          "Finalized payslip has correction revisions; create another correction or unfinalize it explicitly");
   }
   private void requireDraft(Long userId, int year, int month, String role) {
     if (snapshot(userId, year, month, role).isPresent())

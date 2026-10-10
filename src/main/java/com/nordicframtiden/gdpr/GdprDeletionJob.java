@@ -2,9 +2,14 @@ package com.nordicframtiden.gdpr;
 
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContext;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 
 /**
@@ -19,6 +24,9 @@ public class GdprDeletionJob {
 
   static final String CRON = "0 30 3 * * *";
   static final String ZONE = GdprExportMailJob.ZONE;
+  // Not a real account: the name can never equal a deleted user's username,
+  // so the admin self-delete guard never trips on it.
+  static final String SYSTEM_PRINCIPAL = "system:gdpr-deletion-job";
 
   private final GdprDeletionService deletionService;
 
@@ -29,9 +37,21 @@ public class GdprDeletionJob {
   @Scheduled(cron = GdprDeletionJob.CRON, zone = GdprDeletionJob.ZONE)
   public void executeDueDeletions() {
     LocalDate today = LocalDate.now(ZoneId.of(GdprDeletionJob.ZONE));
-    int executed = deletionService.executeDue(today);
-    if (executed > 0) {
-      log.info("GDPR deletion job: executed {} scheduled deletion(s)", executed);
+    // Scheduler threads carry no authentication, but UserService.deleteUser is
+    // @PreAuthorize("hasRole('ADMIN')"). Without this every deletion fails with
+    // AuthenticationCredentialsNotFoundException and is retried forever.
+    SecurityContext previous = SecurityContextHolder.getContext();
+    SecurityContext system = SecurityContextHolder.createEmptyContext();
+    system.setAuthentication(new UsernamePasswordAuthenticationToken(
+        SYSTEM_PRINCIPAL, null, List.of(new SimpleGrantedAuthority("ROLE_ADMIN"))));
+    SecurityContextHolder.setContext(system);
+    try {
+      int executed = deletionService.executeDue(today);
+      if (executed > 0) {
+        log.info("GDPR deletion job: executed {} scheduled deletion(s)", executed);
+      }
+    } finally {
+      SecurityContextHolder.setContext(previous);
     }
   }
 }

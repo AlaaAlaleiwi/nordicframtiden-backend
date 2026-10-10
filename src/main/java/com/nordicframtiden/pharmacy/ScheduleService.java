@@ -77,7 +77,11 @@ public class ScheduleService {
         return shiftRepo.findInRange(start, end, null, user.getId());
     }
 
-    @Transactional
+    // A day conflict is detected before anything is written, so it must not
+    // mark a caller's transaction rollback-only: the schedule wizard catches
+    // it to skip booked days, and would otherwise lose every shift on commit
+    // (UnexpectedRollbackException) after the notifications already went out.
+    @Transactional(noRollbackFor = ShiftConflictException.class)
     public ScheduleShift create(Long pharmacyId, Long userId,
             OffsetDateTime startAt, OffsetDateTime endAt, String note) {
         validateRange(startAt, endAt);
@@ -164,8 +168,9 @@ public class ScheduleService {
         }
 
         // Past-shift lock: moving a shift into the past is a history edit too.
-        if (ShiftLockPolicy.isLocked(s.getStartAt(), today())) {
-            throw new ShiftLockedException(ShiftLockPolicy.lockedMessage(s.getStartAt()));
+        // Check the NEW start — the current one was already checked above.
+        if (ShiftLockPolicy.isLocked(startAt, today())) {
+            throw new ShiftLockedException(ShiftLockPolicy.pastCreationMessage(startAt));
         }
 
         if (startAt != null)

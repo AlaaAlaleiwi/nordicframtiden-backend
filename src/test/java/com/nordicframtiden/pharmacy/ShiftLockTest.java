@@ -129,6 +129,33 @@ class ShiftLockTest {
     }
 
     @Test
+    void movingAFutureShiftIntoThePastIsRefused() {
+        ScheduleShift future = shift("2026-10-05T09:00:00Z", "2026-10-05T17:00:00Z");
+        when(shiftRepo.findById(42L)).thenReturn(Optional.of(future));
+
+        ShiftLockedException ex = assertThrows(ShiftLockedException.class, () ->
+            service.update(42L, null, null,
+                OffsetDateTime.parse("2026-09-20T09:00:00Z"),
+                OffsetDateTime.parse("2026-09-20T17:00:00Z"), null));
+
+        assertTrue(ex.getMessage().contains("2026-09-20"));
+        assertEquals(OffsetDateTime.parse("2026-10-05T09:00:00Z"), future.getStartAt());
+    }
+
+    @Test
+    void movingAFutureStaffShiftIntoThePastIsRefused() {
+        StaffShift future = staffShift("2026-10-05T09:00:00Z", "2026-10-05T17:00:00Z");
+        when(staffShiftRepo.findById(9L)).thenReturn(Optional.of(future));
+
+        assertThrows(ShiftLockedException.class, () ->
+            staffService.update(9L, null,
+                OffsetDateTime.parse("2026-09-20T09:00:00Z"),
+                OffsetDateTime.parse("2026-09-20T17:00:00Z"), null));
+
+        assertEquals(OffsetDateTime.parse("2026-10-05T09:00:00Z"), future.getStartAt());
+    }
+
+    @Test
     void creatingAShiftOnAPastDayIsRefused() {
         AppUser u = user();
         when(userRepo.findById(7L)).thenReturn(Optional.of(u));

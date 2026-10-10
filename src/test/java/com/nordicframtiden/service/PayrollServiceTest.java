@@ -326,4 +326,43 @@ class PayrollServiceTest {
     assertEquals(new BigDecimal("18057.00"), preview.netSalary());
     verify(adjustmentService, never()).replace(eq(7L), eq(2026), eq(8), any());
   }
+
+  @Test
+  void nightShiftAcrossMonthBoundaryIsPaidOnceInTheMonthItStarts() {
+    UserService userService = mock(UserService.class);
+    TaxService taxService = mock(TaxService.class);
+    ScheduleService scheduleService = mock(ScheduleService.class);
+    StaffScheduleService staffScheduleService = mock(StaffScheduleService.class);
+    SalaryAdjustmentService adjustmentService = mock(SalaryAdjustmentService.class);
+    OneTimeTaxService oneTimeTaxService = mock(OneTimeTaxService.class);
+    PayrollService payrollService = new PayrollService(
+        userService, taxService, scheduleService, staffScheduleService, adjustmentService, oneTimeTaxService);
+
+    UserProfile profile = new UserProfile();
+    profile.setPayType("HOURLY");
+    profile.setHourlyCost(BigDecimal.valueOf(200));
+    profile.setYearOfBirth(1990);
+    profile.setMunicipalityCode("0180");
+    when(userService.getProfileByUserId(7L)).thenReturn(profile);
+
+    // Sat 31 Oct 22:00 -> Sun 1 Nov 06:00 Stockholm (CET). The overlap query
+    // returns it for both October and November.
+    ScheduleShift night = new ScheduleShift();
+    night.setStartAt(OffsetDateTime.parse("2026-10-31T22:00:00+01:00"));
+    night.setEndAt(OffsetDateTime.parse("2026-11-01T06:00:00+01:00"));
+    when(scheduleService.listForUser(eq(7L), any(), any())).thenReturn(List.of(night));
+    when(adjustmentService.annualOneTimeTotal(eq(7L), anyInt())).thenReturn(BigDecimal.ZERO);
+    when(taxService.resolveTaxColumn(1990, 2026)).thenReturn(1);
+    when(taxService.resolveTableNumber("0180", 2026)).thenReturn(30);
+    when(taxService.lookupPreliminaryTax(anyInt(), anyInt(), anyInt(), anyInt())).thenReturn(0);
+
+    var october = payrollService.netSalaryForUserMonth(7L, 2026, 10);
+    var november = payrollService.netSalaryForUserMonth(7L, 2026, 11);
+
+    // 2 h Saturday (400 + 50% OB 200) + 6 h Sunday (1200 + 100% OB 1200).
+    assertEquals(new BigDecimal("8.00"), october.totalHours());
+    assertEquals(new BigDecimal("3000.00"), october.grossSalary());
+    assertEquals(new BigDecimal("0.00"), november.totalHours());
+    assertEquals(new BigDecimal("0.00"), november.grossSalary());
+  }
 }

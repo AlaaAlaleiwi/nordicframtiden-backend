@@ -189,6 +189,12 @@ public class UserService {
     return perms == null ? Set.of() : perms;
   }
 
+  private static boolean callerIsAdmin() {
+    var auth = org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+    return auth != null && auth.getAuthorities().stream()
+        .anyMatch(a -> "ROLE_ADMIN".equals(a.getAuthority()));
+  }
+
   // ---------- Read ----------
 
   public UserProfile getProfileByUserId(Long userId) {
@@ -387,6 +393,13 @@ public class UserService {
     if (fullName != null && !fullName.isBlank()) p.setFullName(fullName.trim());
 
     if (email != null && !email.isBlank() && !email.equalsIgnoreCase(p.getEmail())) {
+      // Self-service password reset trusts the stored email, so whoever can
+      // change it can take over the account. PERM_PEOPLE staff may edit
+      // pharmacists but not redirect their email — that stays admin-only.
+      if (!callerIsAdmin()) {
+        throw new org.springframework.security.access.AccessDeniedException(
+            "Endast administratörer kan ändra en annan användares e-postadress.");
+      }
       if (profileRepo.existsByEmail(email)) throw new IllegalArgumentException("Email already exists");
       p.setEmail(email.trim());
     }
