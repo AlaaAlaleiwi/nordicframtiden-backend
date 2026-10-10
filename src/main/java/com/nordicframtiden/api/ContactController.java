@@ -1,5 +1,7 @@
 package com.nordicframtiden.api;
 
+import jakarta.validation.Valid;
+
 import com.nordicframtiden.contact.ContactRequest;
 import com.nordicframtiden.contact.ContactRequestService;
 import jakarta.validation.constraints.NotBlank;
@@ -70,7 +72,7 @@ public class ContactController {
 
   @PostMapping
   @PreAuthorize("permitAll()") // IMPORTANT: allow unauthenticated
-  public ContactResponse create(@RequestBody CreateContactRequest req) {
+  public ContactResponse create(@Valid @RequestBody CreateContactRequest req) {
     var created = service.create(new ContactRequestService.CreateContactRequest(
         req.type(), req.name(), req.organization(), req.email(), req.phone(), req.topic(), req.message()
     ));
@@ -94,7 +96,7 @@ public class ContactController {
 
   @PutMapping("/{id}/handled")
   @PreAuthorize("hasRole('ADMIN') or (hasRole('STAFF') and hasAuthority('PERM_CONTACTS'))")
-  public ContactResponse markHandled(@PathVariable Long id, @RequestBody HandleRequest req, Authentication authentication) {
+  public ContactResponse markHandled(@PathVariable Long id, @Valid @RequestBody HandleRequest req, Authentication authentication) {
     boolean handled = req.handled() != null && req.handled();
     // Spring Security puts the JWT subject (username) in the principal.
     String actorUsername = authentication != null ? authentication.getName() : null;

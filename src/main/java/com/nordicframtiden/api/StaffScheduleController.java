@@ -1,5 +1,7 @@
 package com.nordicframtiden.api;
 
+import jakarta.validation.Valid;
+
 import com.nordicframtiden.company.StaffScheduleService;
 import com.nordicframtiden.company.StaffShift;
 import com.nordicframtiden.security.repo.UserProfileRepository;
@@ -92,14 +94,14 @@ public class StaffScheduleController {
 
   @PostMapping
    
-  public EventDto create(@RequestBody CreateRequest req) {
+  public EventDto create(@Valid @RequestBody CreateRequest req) {
     var created = service.create(req.userId(), req.startAt(), req.endAt(), req.note());
     return EventDto.from(created);
   }
 
   @PutMapping("/{id}")
   
-  public EventDto update(@PathVariable Long id, @RequestBody UpdateRequest req) {
+  public EventDto update(@PathVariable Long id, @Valid @RequestBody UpdateRequest req) {
     var updated = service.update(id, req.userId(), req.startAt(), req.endAt(), req.note());
     return EventDto.from(updated);
   }

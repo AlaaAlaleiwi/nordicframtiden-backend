@@ -102,8 +102,10 @@ public class GdprDeletionService {
     if (!request.getUserId().equals(userId)) {
       throw new IllegalStateException("Not your request");
     }
-    if (GdprDeletionRequest.STATUS_DELETED.equals(request.getStatus())
-        || GdprDeletionRequest.STATUS_CANCELLED.equals(request.getStatus())) {
+    // Only open requests can be withdrawn; DELETED, CANCELLED and REJECTED
+    // are final (a rejection must not be rewritten as a cancellation).
+    if (!GdprDeletionRequest.STATUS_PENDING.equals(request.getStatus())
+        && !GdprDeletionRequest.STATUS_APPROVED.equals(request.getStatus())) {
       throw new IllegalStateException("Request is already closed");
     }
     request.setStatus(GdprDeletionRequest.STATUS_CANCELLED);

@@ -39,6 +39,29 @@ class ChatPushNotificationServiceTest {
   }
 
   @Test
+  void reRegisteringAnotherUsersInstallationMovesTheSameRowInsteadOfDuplicatingIt() {
+    ChatPushSubscriptionRepository subscriptions = mock(ChatPushSubscriptionRepository.class);
+    AppUserRepository users = mock(AppUserRepository.class);
+    AppUser erik = user(8L, "erik");
+    when(users.findByUsername("erik")).thenReturn(Optional.of(erik));
+    ChatPushSubscription previous = subscription("fid-shared");
+    previous.setUser(user(7L, "anna"));
+    when(subscriptions.findByFirebaseInstallationId("fid-shared")).thenReturn(Optional.of(previous));
+    when(subscriptions.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+    ChatPushNotificationService service = new ChatPushNotificationService(
+        subscriptions, users, mock(ChatPushSender.class), mock(UserProfileRepository.class),
+        mock(com.nordicframtiden.admin.model.AdminProfileRepository.class));
+
+    ChatPushSubscription saved = service.register(authentication("erik"), "fid-shared");
+
+    // The device changed hands: the one row (unique installation id) now
+    // belongs to the new user, so the previous owner stops receiving pushes.
+    assertThat(saved).isSameAs(previous);
+    assertThat(saved.getUser()).isSameAs(erik);
+    verify(subscriptions).save(previous);
+  }
+
+  @Test
   void sendsNewMessageNotificationToOtherRoomMembersOnly() {
     ChatPushSubscriptionRepository subscriptions = mock(ChatPushSubscriptionRepository.class);
     AppUserRepository users = mock(AppUserRepository.class);

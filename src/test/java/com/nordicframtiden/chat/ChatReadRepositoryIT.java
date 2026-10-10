@@ -21,6 +21,7 @@ class ChatReadRepositoryIT {
   @Autowired AppUserRepository users;
   @Autowired ChatMessageRepository messages;
   @Autowired ChatRoomMemberRepository members;
+  @Autowired ChatAttachmentDeliveryRepository deliveries;
   @Autowired JdbcTemplate jdbc;
   @Autowired EntityManager entityManager;
 
@@ -113,6 +114,41 @@ class ChatReadRepositoryIT {
     assertThat(counts).containsEntry(joined, 1L).containsEntry(unreadRoom, 2L).doesNotContainKey(discoverable);
     assertThat(members.findByRoomIdIn(List.of(joined, unreadRoom)))
         .hasSize(2);
+  }
+
+  private Long attachment(Long message, Long uploader) {
+    return jdbc.queryForObject("""
+        insert into chat_attachment(message_id,uploader_id,file_name,content_type,size_bytes,data)
+        values (?,?,'a.txt','text/plain',1,decode('00','hex')) returning id
+        """, Long.class, message, uploader);
+  }
+
+  @Test
+  void deliveriesByDepartedUsersDoNotCountTowardsFullDelivery() {
+    Long sender = user("att-sender", true);
+    Long reader = user("att-reader", true);
+    Long departed = user("att-departed", true);
+    Long chat = room(sender);
+    jdbc.update("insert into chat_room_member(room_id,user_id) values (?,?),(?,?)", chat, sender, chat, reader);
+    Long attachmentId = attachment(message(chat, sender, null), sender);
+    // Two delivery rows vs two members, but one row belongs to a non-member.
+    deliveries.recordDelivery(attachmentId, sender, java.time.Instant.now());
+    deliveries.recordDelivery(attachmentId, departed, java.time.Instant.now());
+    assertThat(deliveries.findFullyDeliveredAttachmentIds()).doesNotContain(attachmentId);
+
+    deliveries.recordDelivery(attachmentId, reader, java.time.Instant.now());
+    assertThat(deliveries.findFullyDeliveredAttachmentIds()).contains(attachmentId);
+  }
+
+  @Test
+  void recordDeliveryIsIdempotent() {
+    Long sender = user("dup-sender", true);
+    Long chat = room(sender);
+    Long attachmentId = attachment(message(chat, sender, null), sender);
+
+    assertThat(deliveries.recordDelivery(attachmentId, sender, java.time.Instant.now())).isEqualTo(1);
+    assertThat(deliveries.recordDelivery(attachmentId, sender, java.time.Instant.now())).isZero();
+    assertThat(deliveries.countByAttachmentId(attachmentId)).isEqualTo(1);
   }
 
   @Test

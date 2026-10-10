@@ -230,11 +230,22 @@ public class PayslipDeliveryService {
                 log.info("Payslip delivery skipped a zero-gross payslip (user id redacted)");
                 return false;
             }
+            // A finalized payslip renders its latest stored revision, and the
+            // PDF names that revision (docs/payroll-revisions.md). Totals and
+            // number come from the same revision row so they always agree.
+            Integer revision = null;
+            List<PayslipFreezeService.Revision> history = payslips.history(
+                userId, request.getWorkYear(), request.getWorkMonth(), request.getRole());
+            if (history != null && !history.isEmpty()) {
+                PayslipFreezeService.Revision latest = history.get(history.size() - 1);
+                payslip = latest.payslip();
+                revision = latest.revision();
+            }
             byte[] pdf = pdfBuilder.build(
                 name,
                 request.getWorkYear(), request.getWorkMonth(),
-                List.of(), payslip.grossSalary(), payslip.preliminaryTax(), payslip.netSalary(),
-                payslip.totalHours());
+                List.of(), payslip.grossSalary(), payslip.preliminaryTax(), payslip.taxFreeAmount(),
+                payslip.netSalary(), payslip.totalHours(), revision);
 
             String monthLabel = "%04d-%02d".formatted(request.getWorkYear(), request.getWorkMonth());
             boolean sent = emailService.sendSalaryPdfEmail(request.getEmail(), name, pdf, monthLabel);

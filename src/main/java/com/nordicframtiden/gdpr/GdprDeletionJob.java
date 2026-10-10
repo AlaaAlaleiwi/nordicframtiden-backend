@@ -34,24 +34,39 @@ public class GdprDeletionJob {
     this.deletionService = deletionService;
   }
 
+  private com.nordicframtiden.config.ClusterJobLock jobLock;
+
+  /** Cross-instance lock (Cloud Run may run several instances); absent in unit tests. */
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  void setJobLock(com.nordicframtiden.config.ClusterJobLock jobLock) {
+    this.jobLock = jobLock;
+  }
+
+  private void exclusively(String name, Runnable job) {
+    if (jobLock == null) job.run();
+    else jobLock.runExclusively(name, job);
+  }
+
   @Scheduled(cron = GdprDeletionJob.CRON, zone = GdprDeletionJob.ZONE)
   public void executeDueDeletions() {
-    LocalDate today = LocalDate.now(ZoneId.of(GdprDeletionJob.ZONE));
-    // Scheduler threads carry no authentication, but UserService.deleteUser is
-    // @PreAuthorize("hasRole('ADMIN')"). Without this every deletion fails with
-    // AuthenticationCredentialsNotFoundException and is retried forever.
-    SecurityContext previous = SecurityContextHolder.getContext();
-    SecurityContext system = SecurityContextHolder.createEmptyContext();
-    system.setAuthentication(new UsernamePasswordAuthenticationToken(
-        SYSTEM_PRINCIPAL, null, List.of(new SimpleGrantedAuthority("ROLE_ADMIN"))));
-    SecurityContextHolder.setContext(system);
-    try {
-      int executed = deletionService.executeDue(today);
-      if (executed > 0) {
-        log.info("GDPR deletion job: executed {} scheduled deletion(s)", executed);
+    exclusively("gdpr-deletion", () -> {
+      LocalDate today = LocalDate.now(ZoneId.of(GdprDeletionJob.ZONE));
+      // Scheduler threads carry no authentication, but UserService.deleteUser is
+      // @PreAuthorize("hasRole('ADMIN')"). Without this every deletion fails with
+      // AuthenticationCredentialsNotFoundException and is retried forever.
+      SecurityContext previous = SecurityContextHolder.getContext();
+      SecurityContext system = SecurityContextHolder.createEmptyContext();
+      system.setAuthentication(new UsernamePasswordAuthenticationToken(
+          SYSTEM_PRINCIPAL, null, List.of(new SimpleGrantedAuthority("ROLE_ADMIN"))));
+      SecurityContextHolder.setContext(system);
+      try {
+        int executed = deletionService.executeDue(today);
+        if (executed > 0) {
+          log.info("GDPR deletion job: executed {} scheduled deletion(s)", executed);
+        }
+      } finally {
+        SecurityContextHolder.setContext(previous);
       }
-    } finally {
-      SecurityContextHolder.setContext(previous);
-    }
+    });
   }
 }

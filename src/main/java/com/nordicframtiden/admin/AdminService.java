@@ -170,7 +170,14 @@ public class AdminService {
         if (admin) {
             user.getRoles().add(Role.ADMIN);
         } else {
+            // A pure admin has no other role: removing ADMIN would leave a
+            // logged-in account with no role at all. Delete it instead.
+            if (user.getRoles().size() <= 1) {
+                throw new IllegalStateException(
+                    "Kontot har ingen annan roll än administratör. Ta bort kontot i stället.");
+            }
             // Never strip the last remaining admin — the workspace needs one.
+            repo.lockAllAdmins();
             long adminCount = repo.countByRole(Role.ADMIN);
             if (adminCount <= 1) {
                 throw new IllegalStateException("Kan inte ta bort den sista administratören.");
@@ -193,7 +200,7 @@ public class AdminService {
         if (emailTaken(email))
             throw new IllegalArgumentException("Email already exists");
 
-        if (adminProfileRepo.existsByPhone(phone))
+        if (adminProfileRepo.existsByPhone(phone.trim()))
             throw new IllegalArgumentException("Phone already exists");
 
         // 1️⃣ Generate username. The password is an unusable random value —
@@ -215,7 +222,7 @@ public class AdminService {
         AdminProfile profile = new AdminProfile();
         profile.setFullName(fullName);
         profile.setEmail(email);
-        profile.setPhone(phone);
+        profile.setPhone(phone.trim());
         profile.setUser(user);
         adminProfileRepo.save(profile);
 
@@ -272,7 +279,7 @@ public class AdminService {
             }
 
             if (phone != null && !phone.isBlank() && !phone.equals(profile.getPhone())) {
-                if (adminProfileRepo.existsByPhone(phone)) {
+                if (adminProfileRepo.existsByPhone(phone.trim())) {
                     throw new IllegalArgumentException("Phone already exists");
                 }
                 profile.setPhone(phone.trim());
@@ -304,7 +311,7 @@ public class AdminService {
         }
 
         if (phone != null && !phone.isBlank() && !phone.equals(userProfile.getPhone())) {
-            if (userProfileRepo.existsByPhone(phone)) {
+            if (userProfileRepo.existsByPhone(phone.trim())) {
                 throw new IllegalArgumentException("Phone already exists");
             }
             userProfile.setPhone(phone.trim());
@@ -409,6 +416,7 @@ public class AdminService {
         if (currentUsername != null && currentUsername.equals(user.getUsername())) {
             throw new IllegalArgumentException("You cannot delete your own admin account");
         }
+        repo.lockAllAdmins(); // serialize concurrent deletions before the last-admin count
         long admins = repo.countByRole(Role.ADMIN);
         if (admins <= 1) {
             throw new IllegalArgumentException("Cannot delete the last remaining admin account");

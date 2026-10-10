@@ -49,15 +49,18 @@ public class ProfilePhotoService {
         if (file.getSize() > MAX_PHOTO_BYTES) {
             throw new IllegalArgumentException("Photo exceeds the 5 MB limit");
         }
-        String contentType = file.getContentType();
-        if (contentType == null || !contentType.toLowerCase().startsWith("image/")) {
-            throw new IllegalArgumentException("Only image files are allowed");
+        // The client-claimed type is ignored: the stored (and later served
+        // inline) type comes from the file's own signature, and only raster
+        // formats qualify — never SVG or anything else that can carry script.
+        byte[] plaintext = file.getBytes();
+        String contentType = detectRasterType(plaintext);
+        if (contentType == null) {
+            throw new IllegalArgumentException("Only JPEG, PNG or WebP images are allowed");
         }
 
         AppUser owner = users.findById(userId)
             .orElseThrow(() -> new IllegalArgumentException("User not found"));
 
-        byte[] plaintext = file.getBytes();
         DocumentEncryptionService.Sealed sealed = encryption.encrypt(plaintext);
 
         ProfileDocument doc = new ProfileDocument();
@@ -98,7 +101,30 @@ public class ProfilePhotoService {
             .orElseThrow(() -> new IllegalArgumentException("Photo not found"));
 
         byte[] bytes = encryption.decrypt(doc.getIv(), doc.getData());
-        return new PhotoData(bytes, doc.getContentType(), doc.getFileName(), version(owner));
+        // Photos stored before signature checks may carry any claimed type;
+        // re-derive it so legacy SVG/HTML uploads are never served inline.
+        String detected = detectRasterType(bytes);
+        String contentType = detected == null ? "application/octet-stream" : detected;
+        return new PhotoData(bytes, contentType, doc.getFileName(), version(owner));
+    }
+
+    /** Media type from the file signature for allowed raster formats; null otherwise. */
+    static String detectRasterType(byte[] bytes) {
+        if (bytes == null) return null;
+        if (startsWith(bytes, 0, 0xFF, 0xD8, 0xFF)) return "image/jpeg";
+        if (startsWith(bytes, 0, 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A)) return "image/png";
+        if (startsWith(bytes, 0, 'R', 'I', 'F', 'F') && startsWith(bytes, 8, 'W', 'E', 'B', 'P')) {
+            return "image/webp";
+        }
+        return null;
+    }
+
+    private static boolean startsWith(byte[] bytes, int offset, int... signature) {
+        if (bytes.length < offset + signature.length) return false;
+        for (int i = 0; i < signature.length; i++) {
+            if ((bytes[offset + i] & 0xFF) != signature[i]) return false;
+        }
+        return true;
     }
 
     @Transactional

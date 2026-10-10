@@ -45,6 +45,17 @@ public class PayslipPdfBuilder {
      */
     public byte[] build(String employeeName, int year, int month, List<DayLine> days,
                         BigDecimal gross, BigDecimal tax, BigDecimal net, BigDecimal totalHours) {
+        return build(employeeName, year, month, days, gross, tax, null, net, totalHours, null);
+    }
+
+    /**
+     * Renders the payslip PDF including the tax-free reimbursement line
+     * (shown when non-zero, so gross − tax + tax-free = net adds up) and the
+     * finalized revision number (shown when {@code revision} is non-null).
+     */
+    public byte[] build(String employeeName, int year, int month, List<DayLine> days,
+                        BigDecimal gross, BigDecimal tax, BigDecimal taxFree, BigDecimal net,
+                        BigDecimal totalHours, Integer revision) {
         try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
             Document document = new Document(PageSize.A4, 40, 40, 40, 40);
             PdfWriter.getInstance(document, out);
@@ -54,6 +65,9 @@ public class PayslipPdfBuilder {
             document.add(spacer(8));
             document.add(new Paragraph("Namn: " + safe(employeeName), BODY));
             document.add(new Paragraph("Period: " + monthLabel(year, month), BODY));
+            if (revision != null) {
+                document.add(new Paragraph("Version: " + revision, BODY));
+            }
             document.add(spacer(10));
 
             document.add(new Paragraph("Sammanfattning", HEADING));
@@ -62,6 +76,9 @@ public class PayslipPdfBuilder {
             row(summary, "Totala timmar", hours(totalHours) + " h");
             row(summary, "Bruttolön", money(gross));
             row(summary, "Skatt", "-" + money(tax));
+            if (taxFree != null && taxFree.signum() != 0) {
+                row(summary, "Skattefri ersättning", money(taxFree));
+            }
             boldRow(summary, "Nettolön", money(net));
             document.add(summary);
             document.add(spacer(12));

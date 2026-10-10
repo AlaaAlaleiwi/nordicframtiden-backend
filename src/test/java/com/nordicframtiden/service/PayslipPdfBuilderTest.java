@@ -49,4 +49,38 @@ class PayslipPdfBuilderTest {
 
         assertThat(new String(pdf, java.nio.charset.StandardCharsets.ISO_8859_1)).contains("%%EOF");
     }
+
+    @Test
+    void build_showsTaxFreeReimbursementAndRevisionSoTotalsAddUp() throws Exception {
+        byte[] pdf = builder.build("Anna", 2026, 8, List.of(),
+            new BigDecimal("24000"), new BigDecimal("4800"), new BigDecimal("500"),
+            new BigDecimal("19700"), new BigDecimal("120"), 3);
+
+        String text = text(pdf);
+        assertThat(text).contains("Skattefri ersättning").contains("500.00 SEK");
+        assertThat(text).contains("Version: 3");
+        assertThat(text).contains("19700.00 SEK");
+    }
+
+    @Test
+    void build_omitsZeroTaxFreeLineAndRevisionForDrafts() throws Exception {
+        byte[] pdf = builder.build("Anna", 2026, 8, List.of(),
+            new BigDecimal("24000"), new BigDecimal("4800"), BigDecimal.ZERO,
+            new BigDecimal("19200"), new BigDecimal("120"), null);
+
+        String text = text(pdf);
+        assertThat(text).doesNotContain("Skattefri").doesNotContain("Version");
+        assertThat(text).contains("19200.00 SEK");
+    }
+
+    private static String text(byte[] pdf) throws Exception {
+        try (var reader = new com.lowagie.text.pdf.PdfReader(pdf)) {
+            var extractor = new com.lowagie.text.pdf.parser.PdfTextExtractor(reader);
+            StringBuilder text = new StringBuilder();
+            for (int page = 1; page <= reader.getNumberOfPages(); page++) {
+                text.append(extractor.getTextFromPage(page)).append('\n');
+            }
+            return text.toString();
+        }
+    }
 }

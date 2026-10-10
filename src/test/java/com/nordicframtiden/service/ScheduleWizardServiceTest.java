@@ -257,10 +257,38 @@ class ScheduleWizardServiceTest {
             true));
   }
 
+  @Test
+  void confirmRejectsDateOutsideChosenPeriod() throws Exception {
+    // WEEK of 14 Oct 2026 is Mon 12 – Sun 18 Oct; the 19th is outside it.
+    assertThrows(IllegalArgumentException.class,
+        () -> wizard.confirm("WEEK", LocalDate.of(2026, 10, 14), 5L,
+            List.of(
+                new ScheduleWizardService.Assignment(LocalDate.of(2026, 10, 14), 11L),
+                new ScheduleWizardService.Assignment(LocalDate.of(2026, 10, 19), 12L)),
+            true));
+    verify(scheduleService, never()).create(any(), any(), any(), any(), any());
+  }
+
+  @Test
+  void confirmRejectsAssigneeWithoutPharmacistRole() throws Exception {
+    AppUser staff = user(13L, "staff");
+    staff.setRoles(new java.util.HashSet<>(java.util.Set.of(Role.STAFF)));
+    when(userRepo.findById(13L)).thenReturn(Optional.of(staff));
+
+    assertThrows(IllegalArgumentException.class,
+        () -> wizard.confirm("WEEK", LocalDate.of(2026, 10, 14), 5L,
+            List.of(
+                new ScheduleWizardService.Assignment(LocalDate.of(2026, 10, 14), 11L),
+                new ScheduleWizardService.Assignment(LocalDate.of(2026, 10, 15), 13L)),
+            true));
+    verify(scheduleService, never()).create(any(), any(), any(), any(), any());
+  }
+
   private AppUser user(Long id, String username) {
     AppUser user = new AppUser();
     user.setId(id);
     user.setUsername(username);
+    user.setRoles(new java.util.HashSet<>(java.util.Set.of(Role.USER)));
     return user;
   }
 

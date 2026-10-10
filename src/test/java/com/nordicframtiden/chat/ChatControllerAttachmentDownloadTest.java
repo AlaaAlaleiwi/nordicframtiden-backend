@@ -17,7 +17,10 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -65,8 +68,35 @@ class ChatControllerAttachmentDownloadTest {
     assertThat(response.getHeaders().getContentType()).isEqualTo(MediaType.APPLICATION_OCTET_STREAM);
     assertThat(response.getBody()).containsExactly(1, 2, 3);
     InOrder order = inOrder(deliveries, purgeService);
-    order.verify(deliveries).save(any());
+    order.verify(deliveries).recordDelivery(eq(55L), eq(7L), any());
     order.verify(purgeService).purgeIfFullyDelivered(55L);
+  }
+
+  @Test
+  void repeatDownloadRecordsDeliveryIdempotentlyInsteadOfCheckThenInsert() {
+    AppUser me = new AppUser();
+    me.setId(7L);
+    me.setUsername("anna");
+    ChatAttachment attachment = new ChatAttachment();
+    attachment.setId(55L);
+    attachment.setMessageId(99L);
+    attachment.setFileName("photo.png");
+    attachment.setContentType("image/png");
+    attachment.setData(new byte[] {9});
+    var auth = new UsernamePasswordAuthenticationToken("anna", null);
+
+    when(attachments.findById(55L)).thenReturn(Optional.of(attachment));
+    when(service.current(any())).thenReturn(me);
+    // A concurrent request already inserted the row: the upsert affects 0 rows.
+    when(deliveries.recordDelivery(eq(55L), eq(7L), any())).thenReturn(0);
+
+    var response = controller.download(auth, 55L);
+
+    assertThat(response.getStatusCode().value()).isEqualTo(200);
+    assertThat(response.getBody()).containsExactly(9);
+    verify(deliveries, never()).save(any());
+    verify(deliveries, never()).existsByAttachmentIdAndUserId(any(), any());
+    verify(purgeService).purgeIfFullyDelivered(55L);
   }
 
   @Test

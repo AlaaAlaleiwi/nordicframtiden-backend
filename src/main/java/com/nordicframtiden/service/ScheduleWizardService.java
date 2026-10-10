@@ -209,9 +209,17 @@ public class ScheduleWizardService {
       if (assignment.date() == null || assignment.pharmacistId() == null) {
         throw new IllegalArgumentException("Every assignment needs a date and a pharmacist");
       }
+      if (assignment.date().isBefore(start) || assignment.date().isAfter(end)) {
+        throw new IllegalArgumentException(
+            "Assignment date " + assignment.date() + " is outside the period " + start + " – " + end);
+      }
       AppUser user = userRepo.findById(assignment.pharmacistId())
           .orElseThrow(() -> new IllegalArgumentException(
               "Pharmacist " + assignment.pharmacistId() + " not found"));
+      if (user.getRoles() == null || !user.getRoles().contains(Role.USER)) {
+        throw new IllegalArgumentException(
+            "User " + assignment.pharmacistId() + " is not a pharmacist");
+      }
       pharmacists.put(user.getId(), user);
     }
 

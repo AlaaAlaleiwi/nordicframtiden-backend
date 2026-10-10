@@ -1,5 +1,7 @@
 package com.nordicframtiden.api;
 
+import jakarta.validation.Valid;
+
 import com.nordicframtiden.admin.AdminService;
 import com.nordicframtiden.security.repo.AppUserRepository;
 import com.nordicframtiden.security.service.PasswordResetService;
@@ -115,7 +117,7 @@ public class AdminManagementController {
     }
 
     @PostMapping("/create")
-    public ResponseEntity<?> create(@RequestBody CreateAdminRequest req) {
+    public ResponseEntity<?> create(@Valid @RequestBody CreateAdminRequest req) {
         boolean enabled = req.enabled() == null || req.enabled();
 
         var created = adminService.createAdminWithProfile(
@@ -146,7 +148,7 @@ public class AdminManagementController {
     }
 
     @PutMapping("/{id}")
-    public AdminResponse update(@PathVariable Long id, @RequestBody UpdateAdminRequest req) {
+    public AdminResponse update(@PathVariable Long id, @Valid @RequestBody UpdateAdminRequest req) {
         var updated = adminService.updateAdminWithProfile(
                 id,
                 req.username(),

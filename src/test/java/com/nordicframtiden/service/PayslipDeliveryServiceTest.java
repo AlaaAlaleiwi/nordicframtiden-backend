@@ -107,7 +107,7 @@ class PayslipDeliveryServiceTest {
     private void stubHappyPath() {
         when(profiles.findByUserId(7L)).thenReturn(Optional.of(profile));
         when(payslips.resolve(7L, 2026, 8, "USER")).thenReturn(payslip());
-        when(pdfBuilder.build(any(), anyInt(), anyInt(), any(), any(), any(), any(), any()))
+        when(pdfBuilder.build(any(), anyInt(), anyInt(), any(), any(), any(), any(), any(), any(), any()))
             .thenReturn("%PDF-1.4 test".getBytes());
         when(emailService.sendSalaryPdfEmail(eq("anna@example.com"), eq("Anna Andersson"), any(byte[].class), eq("2026-08")))
             .thenReturn(true);
@@ -134,6 +134,36 @@ class PayslipDeliveryServiceTest {
     }
 
     @Test
+    void deliver_rendersTheLatestFinalizedRevisionWithItsNumberAndTaxFreeLine() {
+        stubHappyPath();
+        // Revision 2 carries a 500 SEK tax-free reimbursement: 24000 - 4800 + 500 = 19700.
+        NetSalaryResponse corrected = new NetSalaryResponse(7L, "2026-08", new BigDecimal("200"),
+            null, null, new BigDecimal("120"), new BigDecimal("24000"), null, null, null, null,
+            new BigDecimal("4800"), new BigDecimal("19700"), new BigDecimal("4800"), BigDecimal.ZERO,
+            new BigDecimal("500"), null, List.of(), null, null, null);
+        when(payslips.history(7L, 2026, 8, "USER")).thenReturn(List.of(
+            new PayslipFreezeService.Revision(1, "system", NOW, null, null, payslip()),
+            new PayslipFreezeService.Revision(2, "admin", NOW, "Missing allowance", null, corrected)));
+
+        assertThat(service.deliver(row)).isTrue();
+
+        verify(pdfBuilder).build(eq("Anna Andersson"), eq(2026), eq(8), eq(List.of()),
+            eq(new BigDecimal("24000")), eq(new BigDecimal("4800")), eq(new BigDecimal("500")),
+            eq(new BigDecimal("19700")), eq(new BigDecimal("120")), eq(2));
+    }
+
+    @Test
+    void deliver_draftPayslipHasNoRevisionNumber() {
+        stubHappyPath();
+
+        assertThat(service.deliver(row)).isTrue();
+
+        verify(pdfBuilder).build(eq("Anna Andersson"), eq(2026), eq(8), eq(List.of()),
+            eq(new BigDecimal("24000")), eq(new BigDecimal("4800")), eq(BigDecimal.ZERO),
+            eq(new BigDecimal("19200")), eq(new BigDecimal("120")), eq((Integer) null));
+    }
+
+    @Test
     void deliver_skipsTheRowWhenAnotherWorkerHoldsTheClaim() {
         when(requests.claimIfPending(eq(100L), any())).thenReturn(0);
 
@@ -149,7 +179,7 @@ class PayslipDeliveryServiceTest {
     void deliver_recordsFailure_andRetriesWhenTheEmailThrows() {
         when(profiles.findByUserId(7L)).thenReturn(Optional.of(profile));
         when(payslips.resolve(7L, 2026, 8, "USER")).thenReturn(payslip());
-        when(pdfBuilder.build(any(), anyInt(), anyInt(), any(), any(), any(), any(), any()))
+        when(pdfBuilder.build(any(), anyInt(), anyInt(), any(), any(), any(), any(), any(), any(), any()))
             .thenReturn("%PDF-1.4".getBytes());
         when(emailService.sendSalaryPdfEmail(anyString(), anyString(), any(byte[].class), anyString()))
             .thenThrow(new IllegalStateException("smtp down"));
@@ -172,7 +202,7 @@ class PayslipDeliveryServiceTest {
 
         assertThat(sent).isFalse();
         verify(requests).markSkippedIfSending(100L, "Zero-gross payslip; no email sent");
-        verify(pdfBuilder, never()).build(any(), anyInt(), anyInt(), any(), any(), any(), any(), any());
+        verify(pdfBuilder, never()).build(any(), anyInt(), anyInt(), any(), any(), any(), any(), any(), any(), any());
         verify(emailService, never()).sendSalaryPdfEmail(anyString(), anyString(), any(byte[].class), anyString());
         verify(pushSender, never()).send(anyString(), any());
         verify(requests, never()).recordFailureIfSending(anyLong(), anyString(), anyString(), anyInt());
@@ -185,7 +215,7 @@ class PayslipDeliveryServiceTest {
         when(requests.claimIfPending(eq(100L), any())).thenReturn(1);
         when(profiles.findByUserId(7L)).thenReturn(Optional.of(profile));
         when(payslips.resolve(7L, 2026, 8, "USER")).thenReturn(payslip());
-        when(pdfBuilder.build(any(), anyInt(), anyInt(), any(), any(), any(), any(), any()))
+        when(pdfBuilder.build(any(), anyInt(), anyInt(), any(), any(), any(), any(), any(), any(), any()))
             .thenReturn("%PDF-1.4".getBytes());
         when(emailService.sendSalaryPdfEmail(anyString(), anyString(), any(byte[].class), anyString()))
             .thenThrow(new IllegalStateException("smtp down again"));
@@ -200,7 +230,7 @@ class PayslipDeliveryServiceTest {
     void deliver_leavesPendingAndReleasesTheClaimWhenMailIsDisabled() {
         when(profiles.findByUserId(7L)).thenReturn(Optional.of(profile));
         when(payslips.resolve(7L, 2026, 8, "USER")).thenReturn(payslip());
-        when(pdfBuilder.build(any(), anyInt(), anyInt(), any(), any(), any(), any(), any()))
+        when(pdfBuilder.build(any(), anyInt(), anyInt(), any(), any(), any(), any(), any(), any(), any()))
             .thenReturn("%PDF-1.4".getBytes());
         when(emailService.sendSalaryPdfEmail(anyString(), anyString(), any(byte[].class), anyString()))
             .thenReturn(false);
@@ -219,7 +249,7 @@ class PayslipDeliveryServiceTest {
     void deliver_skipsThePushWhenNoDevicesAreRegistered_butStillCompletes() {
         when(profiles.findByUserId(7L)).thenReturn(Optional.of(profile));
         when(payslips.resolve(7L, 2026, 8, "USER")).thenReturn(payslip());
-        when(pdfBuilder.build(any(), anyInt(), anyInt(), any(), any(), any(), any(), any()))
+        when(pdfBuilder.build(any(), anyInt(), anyInt(), any(), any(), any(), any(), any(), any(), any()))
             .thenReturn("%PDF-1.4".getBytes());
         when(emailService.sendSalaryPdfEmail(anyString(), anyString(), any(byte[].class), anyString()))
             .thenReturn(true);

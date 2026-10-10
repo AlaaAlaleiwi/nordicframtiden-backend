@@ -9,6 +9,8 @@ import org.springframework.cache.CacheManager;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import com.nordicframtiden.service.model.TaxTableRow;
 
@@ -78,6 +80,26 @@ public class TaxTableImportStore {
            col_1, col_2, col_3, col_4, col_5, col_6, percentage)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, rows, 500, this::setParameters);
+    evictTaxTableRowsAfterCommit();
+  }
+
+  // Evicting inside the transaction would let a concurrent lookup re-cache the
+  // old (still committed) rows before this import becomes visible. Clear the
+  // cache only once the new rows are committed.
+  private void evictTaxTableRowsAfterCommit() {
+    if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+      evictTaxTableRows();
+      return;
+    }
+    TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+      @Override
+      public void afterCommit() {
+        evictTaxTableRows();
+      }
+    });
+  }
+
+  private void evictTaxTableRows() {
     var cache = cacheManager != null ? cacheManager.getCache("taxTableRows") : null;
     if (cache != null) {
       cache.clear();

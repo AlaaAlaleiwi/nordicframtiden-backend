@@ -7,9 +7,12 @@ import com.google.common.util.concurrent.MoreExecutors;
 import com.google.firebase.FirebaseApp;
 import com.google.firebase.FirebaseOptions;
 import com.google.firebase.messaging.FirebaseMessaging;
+import com.google.firebase.messaging.FirebaseMessagingException;
 import com.google.firebase.messaging.Message;
+import com.google.firebase.messaging.MessagingErrorCode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
@@ -21,15 +24,27 @@ import java.util.Map;
 public class FirebaseChatPushSender implements ChatPushSender {
   private static final Logger log = LoggerFactory.getLogger(FirebaseChatPushSender.class);
   private final FirebaseMessaging messaging;
+  private final ChatPushSubscriptionRepository subscriptions;
 
-  public FirebaseChatPushSender(FirebaseNotificationProperties properties) throws IOException {
+  @Autowired
+  public FirebaseChatPushSender(FirebaseNotificationProperties properties,
+                                ChatPushSubscriptionRepository subscriptions) throws IOException {
+    this(messaging(properties), subscriptions);
+  }
+
+  FirebaseChatPushSender(FirebaseMessaging messaging, ChatPushSubscriptionRepository subscriptions) {
+    this.messaging = messaging;
+    this.subscriptions = subscriptions;
+  }
+
+  private static FirebaseMessaging messaging(FirebaseNotificationProperties properties) throws IOException {
     FirebaseOptions options = FirebaseOptions.builder()
         .setCredentials(GoogleCredentials.getApplicationDefault())
         .setProjectId(properties.getProjectId())
         .build();
     FirebaseApp app = FirebaseApp.getApps().stream().findFirst()
         .orElseGet(() -> FirebaseApp.initializeApp(options));
-    this.messaging = FirebaseMessaging.getInstance(app);
+    return FirebaseMessaging.getInstance(app);
   }
 
   @Override
@@ -44,6 +59,14 @@ public class FirebaseChatPushSender implements ChatPushSender {
           log.debug("Firebase chat notification completed");
         }
         @Override public void onFailure(Throwable error) {
+          if (isPermanentlyUndeliverable(error)) {
+            // Like APNs 410/BadDeviceToken: the installation is gone (app
+            // uninstalled, ID rotated or from another project), so stop
+            // targeting it instead of failing on every message.
+            subscriptions.deleteByFirebaseInstallationId(firebaseInstallationId);
+            log.debug("Removed unregistered Firebase chat subscription");
+            return;
+          }
           log.warn("Firebase chat notification could not be delivered: {}",
               error.getClass().getSimpleName());
         }
@@ -52,5 +75,20 @@ public class FirebaseChatPushSender implements ChatPushSender {
       log.warn("Firebase chat notification could not be queued: {}",
           error.getClass().getSimpleName());
     }
+  }
+
+  /**
+   * UNREGISTERED and SENDER_ID_MISMATCH mean the target can never receive
+   * pushes from this project. INVALID_ARGUMENT is deliberately excluded: FCM
+   * also uses it for malformed payloads, which says nothing about the device.
+   */
+  static boolean isPermanentlyUndeliverable(Throwable error) {
+    for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+      if (cause instanceof FirebaseMessagingException messagingError) {
+        MessagingErrorCode code = messagingError.getMessagingErrorCode();
+        return code == MessagingErrorCode.UNREGISTERED || code == MessagingErrorCode.SENDER_ID_MISMATCH;
+      }
+    }
+    return false;
   }
 }

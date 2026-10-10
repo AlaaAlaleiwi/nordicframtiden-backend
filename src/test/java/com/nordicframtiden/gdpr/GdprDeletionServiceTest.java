@@ -180,6 +180,16 @@ class GdprDeletionServiceTest {
   }
 
   @Test
+  void cancel_cannot_rewrite_a_rejected_request() {
+    GdprDeletionRequest rejected = new GdprDeletionRequest(7L, "pharm", "anna@example.com", null);
+    rejected.setStatus(GdprDeletionRequest.STATUS_REJECTED);
+    when(requests.findById(1L)).thenReturn(Optional.of(rejected));
+
+    assertThatThrownBy(() -> service.cancel(7L, 1L)).isInstanceOf(IllegalStateException.class);
+    assertThat(rejected.getStatus()).isEqualTo(GdprDeletionRequest.STATUS_REJECTED);
+  }
+
+  @Test
   void cancel_rejects_someone_elses_request() {
     GdprDeletionRequest other = new GdprDeletionRequest(99L, "other", "x@x.se", null);
     when(requests.findById(1L)).thenReturn(Optional.of(other));

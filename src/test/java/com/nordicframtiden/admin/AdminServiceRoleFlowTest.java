@@ -126,12 +126,22 @@ class AdminServiceRoleFlowTest {
 
     @Test
     void lastAdminCannotBeDemoted() {
-        AppUser lastAdmin = userWithRoles(Role.ADMIN);
+        AppUser lastAdmin = userWithRoles(Role.USER, Role.ADMIN);
         when(repo.findById(7L)).thenReturn(Optional.of(lastAdmin));
         when(repo.countByRole(Role.ADMIN)).thenReturn(1L);
 
         assertThrows(IllegalStateException.class, () -> service.setAdminRole(7L, false));
         assertTrue(lastAdmin.getRoles().contains(Role.ADMIN), "roles untouched on guard");
+    }
+
+    @Test
+    void pureAdminCannotBeDemotedIntoAnAccountWithNoRole() {
+        AppUser pureAdmin = userWithRoles(Role.ADMIN);
+        when(repo.findById(7L)).thenReturn(Optional.of(pureAdmin));
+
+        assertThrows(IllegalStateException.class, () -> service.setAdminRole(7L, false));
+        assertEquals(Set.of(Role.ADMIN), pureAdmin.getRoles());
+        verify(repo, never()).save(any());
     }
 
     @Test

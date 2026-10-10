@@ -247,11 +247,17 @@ public class ScheduleService {
      * shift. {@code excludeShiftId} lets an update ignore itself.
      */
     private void assertNoShiftOnSameDay(Long userId, OffsetDateTime startAt, OffsetDateTime endAt, Long excludeShiftId) {
+        // Serialize shift writes per user: without the row lock two concurrent
+        // creates both pass the check below and both insert.
+        userRepo.lockForPayroll(userId);
         // Local Stockholm midnights (DST-safe: never +/- fixed 24h), and the
         // window covers EVERY day the shift touches (overnight shifts too):
         // from the start day's midnight to the day AFTER the last touched day.
+        // The end is exclusive: a shift ending at 00:00 does not touch the next
+        // day (otherwise the outcome depended on which shift was booked first).
         var dayStart = startAt.atZoneSameInstant(SCHEDULE_ZONE).toLocalDate().atStartOfDay(SCHEDULE_ZONE).toInstant().atOffset(ZoneOffset.UTC);
-        var windowEnd = endAt.atZoneSameInstant(SCHEDULE_ZONE).toLocalDate().plusDays(1).atStartOfDay(SCHEDULE_ZONE).toInstant().atOffset(ZoneOffset.UTC);
+        var lastTouchedDay = endAt.minusNanos(1).atZoneSameInstant(SCHEDULE_ZONE).toLocalDate();
+        var windowEnd = lastTouchedDay.plusDays(1).atStartOfDay(SCHEDULE_ZONE).toInstant().atOffset(ZoneOffset.UTC);
         var dayEnd = windowEnd.isAfter(dayStart) ? windowEnd : dayStart.plusDays(1);
 
         List<ScheduleShift> sameDay = shiftRepo.findByUserIdAndStartAtLessThanAndEndAtGreaterThan(userId, dayEnd, dayStart);

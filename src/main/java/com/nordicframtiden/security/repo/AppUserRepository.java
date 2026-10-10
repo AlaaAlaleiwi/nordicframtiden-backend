@@ -58,6 +58,15 @@ public interface AppUserRepository extends JpaRepository<AppUser, Long> {
       """)
   long countByRole(@Param("role") Role role);
 
+  /**
+   * Locks every admin row: demotion/deletion take this before counting, so
+   * two concurrent "remove an admin" calls serialize and can never both pass
+   * the last-admin check.
+   */
+  @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+  @Query("select u from AppUser u join u.roles r where r = com.nordicframtiden.security.model.Role.ADMIN")
+  List<AppUser> lockAllAdmins();
+
   @Query("""
         select distinct u
         from AppUser u

@@ -8,7 +8,9 @@ import org.springframework.web.socket.server.standard.ServletServerContainerFact
 @Configuration
 @EnableWebSocket
 public class ChatWebSocketConfig implements WebSocketConfigurer {
-  private static final int MAX_TEXT_BUFFER_BYTES = 512 * 1024;
+  // Clients only send small JSON control frames (chat writes go over REST),
+  // so inbound frames are capped well below the old call-signalling limit.
+  static final int MAX_MESSAGE_BUFFER_BYTES = 64 * 1024;
 
   private final ChatWebSocketHandler handler;
   private final ChatWebSocketHandshakeHandler handshakeHandler;
@@ -34,11 +36,9 @@ public class ChatWebSocketConfig implements WebSocketConfigurer {
 
   @Bean
   public ServletServerContainerFactoryBean createWebSocketContainer() {
-    // WebRTC offers/answers with video m-lines are large; raise the default
-    // 8 KB text buffer so SDP exchange is never truncated or rejected.
     ServletServerContainerFactoryBean container = new ServletServerContainerFactoryBean();
-    container.setMaxTextMessageBufferSize(MAX_TEXT_BUFFER_BYTES);
-    container.setMaxBinaryMessageBufferSize(MAX_TEXT_BUFFER_BYTES);
+    container.setMaxTextMessageBufferSize(MAX_MESSAGE_BUFFER_BYTES);
+    container.setMaxBinaryMessageBufferSize(MAX_MESSAGE_BUFFER_BYTES);
     return container;
   }
 }

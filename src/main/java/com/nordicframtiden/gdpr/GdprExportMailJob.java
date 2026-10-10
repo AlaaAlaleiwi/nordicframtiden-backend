@@ -44,19 +44,34 @@ public class GdprExportMailJob {
     this.objectMapper = objectMapper;
   }
 
+  private com.nordicframtiden.config.ClusterJobLock jobLock;
+
+  /** Cross-instance lock (Cloud Run may run several instances); absent in unit tests. */
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  void setJobLock(com.nordicframtiden.config.ClusterJobLock jobLock) {
+    this.jobLock = jobLock;
+  }
+
+  private void exclusively(String name, Runnable job) {
+    if (jobLock == null) job.run();
+    else jobLock.runExclusively(name, job);
+  }
+
   @Scheduled(cron = GdprExportMailJob.CRON, zone = GdprExportMailJob.ZONE)
   public void processPendingRequests() {
-    List<GdprExportRequest> pending =
-        requests.findByStatusOrderByCreatedAtAsc(GdprExportRequest.STATUS_PENDING);
-    if (pending.isEmpty()) {
-      return;
-    }
-    log.info("GDPR export job: processing {} pending request(s)", pending.size());
-    int delivered = 0;
-    for (GdprExportRequest request : pending) {
-      delivered += deliver(request) ? 1 : 0;
-    }
-    log.info("GDPR export job: {} delivered, {} still pending", delivered, pending.size() - delivered);
+    exclusively("gdpr-export-mail", () -> {
+      List<GdprExportRequest> pending =
+          requests.findByStatusOrderByCreatedAtAsc(GdprExportRequest.STATUS_PENDING);
+      if (pending.isEmpty()) {
+        return;
+      }
+      log.info("GDPR export job: processing {} pending request(s)", pending.size());
+      int delivered = 0;
+      for (GdprExportRequest request : pending) {
+        delivered += deliver(request) ? 1 : 0;
+      }
+      log.info("GDPR export job: {} delivered, {} still pending", delivered, pending.size() - delivered);
+    });
   }
 
   /** Processes one request. Returns true when it was delivered and marked SENT. */

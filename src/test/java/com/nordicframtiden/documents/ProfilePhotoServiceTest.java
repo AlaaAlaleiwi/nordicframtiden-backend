@@ -47,6 +47,10 @@ class ProfilePhotoServiceTest {
     return new org.springframework.mock.web.MockMultipartFile("file", name, contentType, bytes);
   }
 
+  private static final byte[] PNG = {(byte) 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 1, 2};
+  private static final byte[] JPEG = {(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xE0, 4, 5};
+  private static final byte[] WEBP = {'R', 'I', 'F', 'F', 4, 0, 0, 0, 'W', 'E', 'B', 'P', 'V', 'P', '8', ' '};
+
   private ProfileDocument savedDocument(long id) {
     ProfileDocument d = new ProfileDocument();
     org.springframework.test.util.ReflectionTestUtils.setField(d, "id", id);
@@ -60,7 +64,7 @@ class ProfilePhotoServiceTest {
     when(documents.save(any(ProfileDocument.class))).thenReturn(savedDocument(55L));
 
     ProfilePhotoService.PhotoDto dto = service.upload(
-        7L, image("me.png", "image/png", new byte[]{1, 2, 3}));
+        7L, image("me.png", "image/png", PNG));
 
     assertEquals(55L, dto.documentId());
     assertEquals(55L, owner.getPhotoId());
@@ -82,7 +86,7 @@ class ProfilePhotoServiceTest {
     when(encryption.encrypt(any())).thenReturn(new DocumentEncryptionService.Sealed(new byte[]{1}, new byte[]{2}));
     when(documents.save(any(ProfileDocument.class))).thenReturn(savedDocument(56L));
 
-    service.upload(7L, image("me.jpg", "image/jpeg", new byte[]{4, 5}));
+    service.upload(7L, image("me.jpg", "image/jpeg", JPEG));
 
     verify(documents).deleteByIdAndUserId(10L, 7L);
     assertEquals(56L, owner.getPhotoId());
@@ -102,8 +106,53 @@ class ProfilePhotoServiceTest {
     when(users.findById(7L)).thenReturn(Optional.of(owner));
 
     assertThrows(IllegalArgumentException.class,
-        () -> service.upload(7L, image("x.pdf", "application/pdf", new byte[]{1})));
+        () -> service.upload(7L, image("x.pdf", "application/pdf", "%PDF-1.7".getBytes())));
     verify(documents, never()).save(any(ProfileDocument.class));
+  }
+
+  @Test
+  void uploadRejectsSvgAndOtherImagesWhoseBytesAreNotAllowedRasterFormats() {
+    when(users.findById(7L)).thenReturn(Optional.of(owner));
+    byte[] svg = "<svg xmlns=\"http://www.w3.org/2000/svg\"><script>alert(1)</script></svg>".getBytes();
+
+    assertThrows(IllegalArgumentException.class,
+        () -> service.upload(7L, image("x.svg", "image/svg+xml", svg)));
+    // Claiming a raster type does not help: the signature decides.
+    assertThrows(IllegalArgumentException.class,
+        () -> service.upload(7L, image("x.png", "image/png", svg)));
+    assertThrows(IllegalArgumentException.class,
+        () -> service.upload(7L, image("x.gif", "image/gif", "GIF89a....".getBytes())));
+    verify(documents, never()).save(any(ProfileDocument.class));
+  }
+
+  @Test
+  void uploadStoresTypeDetectedFromSignatureNotTheClaimedOne() throws IOException {
+    when(users.findById(7L)).thenReturn(Optional.of(owner));
+    when(encryption.encrypt(any())).thenReturn(new DocumentEncryptionService.Sealed(new byte[]{1}, new byte[]{2}));
+    when(documents.save(any(ProfileDocument.class))).thenReturn(savedDocument(58L));
+
+    service.upload(7L, image("me.webp", "application/octet-stream", WEBP));
+
+    ArgumentCaptor<ProfileDocument> doc = ArgumentCaptor.forClass(ProfileDocument.class);
+    verify(documents).save(doc.capture());
+    assertEquals("image/webp", doc.getValue().getContentType());
+  }
+
+  @Test
+  void loadNeverServesLegacyNonRasterPhotoAsImage() {
+    owner.setPhotoId(55L);
+    owner.setPhotoUpdatedAt(Instant.ofEpochMilli(1L));
+    when(users.findById(7L)).thenReturn(Optional.of(owner));
+    ProfileDocument doc = savedDocument(55L);
+    doc.setUser(owner);
+    doc.setContentType("image/svg+xml");
+    doc.setFileName("legacy.svg");
+    doc.setIv(new byte[]{1});
+    doc.setData(new byte[]{2});
+    when(documents.findById(55L)).thenReturn(Optional.of(doc));
+    when(encryption.decrypt(any(), any())).thenReturn("<svg/>".getBytes());
+
+    assertEquals("application/octet-stream", service.load(7L, null).contentType());
   }
 
   @Test
@@ -121,7 +170,7 @@ class ProfilePhotoServiceTest {
     when(users.findById(7L)).thenReturn(Optional.empty());
 
     assertThrows(IllegalArgumentException.class,
-        () -> service.upload(7L, image("x.png", "image/png", new byte[]{1})));
+        () -> service.upload(7L, image("x.png", "image/png", PNG)));
     verify(documents, never()).save(any(ProfileDocument.class));
   }
 
@@ -138,11 +187,11 @@ class ProfilePhotoServiceTest {
     doc.setIv(new byte[]{1});
     doc.setData(new byte[]{2});
     when(documents.findById(55L)).thenReturn(Optional.of(doc));
-    when(encryption.decrypt(any(), any())).thenReturn(new byte[]{42});
+    when(encryption.decrypt(any(), any())).thenReturn(PNG);
 
     ProfilePhotoService.PhotoData photo = service.load(7L, null);
 
-    assertArrayEquals(new byte[]{42}, photo.bytes());
+    assertArrayEquals(PNG, photo.bytes());
     assertEquals("image/png", photo.contentType());
     assertEquals("me.png", photo.fileName());
     assertEquals("123456", photo.version());
@@ -184,7 +233,7 @@ class ProfilePhotoServiceTest {
     when(encryption.encrypt(any())).thenReturn(new DocumentEncryptionService.Sealed(new byte[]{1}, new byte[]{2}));
     when(documents.save(any(ProfileDocument.class))).thenReturn(savedDocument(57L));
 
-    service.upload(7L, image("a.png", "image/png", new byte[]{1}));
+    service.upload(7L, image("a.png", "image/png", PNG));
     Instant first = owner.getPhotoUpdatedAt();
 
     String v1 = service.version(owner);

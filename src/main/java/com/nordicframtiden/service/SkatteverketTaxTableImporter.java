@@ -69,15 +69,30 @@ public class SkatteverketTaxTableImporter {
     this.httpClient = httpClient;
   }
 
+  private com.nordicframtiden.config.ClusterJobLock jobLock;
+
+  /** Cross-instance lock (Cloud Run may run several instances); absent in unit tests. */
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  void setJobLock(com.nordicframtiden.config.ClusterJobLock jobLock) {
+    this.jobLock = jobLock;
+  }
+
+  private void exclusively(String name, Runnable job) {
+    if (jobLock == null) job.run();
+    else jobLock.runExclusively(name, job);
+  }
+
   @Scheduled(
       cron = "${app.skatteverket.tax-table-import.cron:0 15 3 * * *}",
       zone = "Europe/Stockholm")
   public void importPublishedYearIfMissing() {
-    LocalDate today = LocalDate.now(STOCKHOLM);
-    importYearIfMissing(today.getYear());
-    if (today.getMonthValue() == 12) {
-      importYearIfMissing(today.getYear() + 1);
-    }
+    exclusively("skatteverket-tax-import", () -> {
+      LocalDate today = LocalDate.now(STOCKHOLM);
+      importYearIfMissing(today.getYear());
+      if (today.getMonthValue() == 12) {
+        importYearIfMissing(today.getYear() + 1);
+      }
+    });
   }
 
   @EventListener(ApplicationReadyEvent.class)

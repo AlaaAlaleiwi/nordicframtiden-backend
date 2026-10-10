@@ -1,5 +1,7 @@
 package com.nordicframtiden.api;
 
+import jakarta.validation.Valid;
+
 import com.nordicframtiden.pharmacy.Pharmacy;
 import com.nordicframtiden.pharmacy.PharmacyService;
 import jakarta.validation.constraints.NotBlank;
@@ -76,12 +78,12 @@ public record UpdatePharmacyRequest(
   @GetMapping
   public org.springframework.http.ResponseEntity<List<PharmacyResponse>> list() {
     return org.springframework.http.ResponseEntity.ok()
-        .cacheControl(org.springframework.http.CacheControl.maxAge(java.time.Duration.ofHours(12)).cachePublic())
+        .cacheControl(org.springframework.http.CacheControl.maxAge(java.time.Duration.ofHours(12)).cachePrivate()) // authenticated data: never in shared caches
         .body(service.list().stream().map(PharmacyResponse::from).toList());
   }
 
   @PostMapping
-  public PharmacyResponse create(@RequestBody CreatePharmacyRequest req) {
+  public PharmacyResponse create(@Valid @RequestBody CreatePharmacyRequest req) {
     Pharmacy created = service.create(new PharmacyService.PharmacyCreateRequest(
     req.name(),
     req.email(),
@@ -97,7 +99,7 @@ public record UpdatePharmacyRequest(
   }
 
   @PutMapping("/{id}")
-  public PharmacyResponse update(@PathVariable Long id, @RequestBody UpdatePharmacyRequest req) {
+  public PharmacyResponse update(@PathVariable Long id, @Valid @RequestBody UpdatePharmacyRequest req) {
 Pharmacy updated = service.update(id, new PharmacyService.PharmacyUpdateRequest(
     req.name(),
     req.email(),

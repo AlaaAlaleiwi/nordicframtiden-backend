@@ -30,13 +30,28 @@ public class PayslipDeliveryJob {
     this.deliveryService = deliveryService;
   }
 
+  private com.nordicframtiden.config.ClusterJobLock jobLock;
+
+  /** Cross-instance lock (Cloud Run may run several instances); absent in unit tests. */
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  void setJobLock(com.nordicframtiden.config.ClusterJobLock jobLock) {
+    this.jobLock = jobLock;
+  }
+
+  private void exclusively(String name, Runnable job) {
+    if (jobLock == null) job.run();
+    else jobLock.runExclusively(name, job);
+  }
+
   @Scheduled(cron = PayslipDeliveryJob.CRON, zone = PayslipDeliveryJob.ZONE)
   public void run() {
-    LocalDate today = LocalDate.now(ZoneId.of(PayslipDeliveryJob.ZONE));
-    int queued = deliveryService.queueIfReady(today);
-    int delivered = deliveryService.deliverPending();
-    if (queued > 0 || delivered > 0) {
-      log.info("Payslip delivery job: {} queued, {} delivered", queued, delivered);
-    }
+    exclusively("payslip-delivery", () -> {
+      LocalDate today = LocalDate.now(ZoneId.of(PayslipDeliveryJob.ZONE));
+      int queued = deliveryService.queueIfReady(today);
+      int delivered = deliveryService.deliverPending();
+      if (queued > 0 || delivered > 0) {
+        log.info("Payslip delivery job: {} queued, {} delivered", queued, delivered);
+      }
+    });
   }
 }

@@ -59,4 +59,15 @@ class AdminManagementControllerSecurityTest {
         mvc.perform(get("/api/admins"))
             .andExpect(status().isOk());
     }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void createWithMissingFieldsIsRejectedAs400BeforeReachingTheService() throws Exception {
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/admins/create")
+                .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf())
+                .contentType("application/json")
+                .content("{\"email\":\"not-an-email\",\"phone\":\"\"}"))
+            .andExpect(status().isBadRequest());
+        org.mockito.Mockito.verifyNoInteractions(adminService);
+    }
 }

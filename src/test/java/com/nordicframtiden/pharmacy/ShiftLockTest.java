@@ -213,6 +213,19 @@ class ShiftLockTest {
     }
 
     @Test
+    void partialStaffShiftUpdateKeepsTheNote() {
+        StaffShift today = staffShift("2026-09-28T07:00:00Z", "2026-09-28T15:00:00Z");
+        today.setNote("Opening shift");
+        when(staffShiftRepo.findById(10L)).thenReturn(Optional.of(today));
+        when(staffShiftRepo.save(any(StaffShift.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        StaffShift updated = staffService.update(10L, null, null,
+            OffsetDateTime.parse("2026-09-28T16:00:00Z"), null);
+
+        assertEquals("Opening shift", updated.getNote());
+    }
+
+    @Test
     void lockRuleUsesTheStockholmDay() {
         // 2026-09-28T00:30Z is still Sep 28 in Stockholm (summmer: +02:00)? No —
         // CEST is +02:00, so 00:30Z is 02:30 Sep 28: today, not locked.

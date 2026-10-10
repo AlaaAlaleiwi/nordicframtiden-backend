@@ -207,12 +207,7 @@ public class ChatController {
 
     // Record delivery for this member, then purge if everyone has received
     // the attachment (this request included).
-    if (!deliveries.existsByAttachmentIdAndUserId(attachmentId, me.getId())) {
-      ChatAttachmentDelivery delivery = new ChatAttachmentDelivery();
-      delivery.setAttachmentId(attachmentId);
-      delivery.setUserId(me.getId());
-      deliveries.save(delivery);
-    }
+    deliveries.recordDelivery(attachmentId, me.getId(), Instant.now());
     purgeService.purgeIfFullyDelivered(attachmentId);
 
     return ResponseEntity.ok()

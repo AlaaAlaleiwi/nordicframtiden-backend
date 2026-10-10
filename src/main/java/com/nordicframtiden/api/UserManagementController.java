@@ -1,5 +1,7 @@
 package com.nordicframtiden.api;
 
+import jakarta.validation.Valid;
+
 import com.nordicframtiden.security.model.Permission;
 import com.nordicframtiden.security.model.Role;
 import com.nordicframtiden.security.service.PasswordResetService;
@@ -154,7 +156,7 @@ public class UserManagementController {
 
   @PutMapping("/me")
   @PreAuthorize("isAuthenticated()")
-  public UserResponse updateMe(Authentication auth, @RequestBody UpdateOwnProfileRequest req) {
+  public UserResponse updateMe(Authentication auth, @Valid @RequestBody UpdateOwnProfileRequest req) {
     var updated = userService.updateOwnProfile(
         auth.getName(),
         req.fullName(),
@@ -189,7 +191,7 @@ public class UserManagementController {
   // link — no clear-text password is returned or emailed.
   @PostMapping
   @PreAuthorize("hasRole('ADMIN') or (hasAuthority('PERM_PEOPLE') and #role == T(com.nordicframtiden.security.model.Role).USER)")
-  public ResponseEntity<?> create(@RequestParam Role role, @RequestBody CreateUserRequest req) {
+  public ResponseEntity<?> create(@RequestParam Role role, @Valid @RequestBody CreateUserRequest req) {
     boolean enabled = req.enabled() == null || req.enabled();
 
     var created = userService.createWithProfile(
@@ -218,7 +220,7 @@ public class UserManagementController {
   // ✅ STAFF/ADMIN can update
   @PutMapping("/{id}")
   @PreAuthorize("@accountAuthorization.canManage(authentication, #id)")
-  public UserResponse update(@PathVariable Long id, @RequestBody UpdateUserRequest req) {
+  public UserResponse update(@PathVariable Long id, @Valid @RequestBody UpdateUserRequest req) {
     var updated = userService.updateWithProfile(
         id,
         req.fullName(),

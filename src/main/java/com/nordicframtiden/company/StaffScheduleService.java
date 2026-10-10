@@ -133,7 +133,9 @@ public class StaffScheduleService {
         throw new IllegalArgumentException("startAt must be before endAt");
       }
     }
-    s.setNote(note);
+    // Partial update: an omitted note keeps the existing one.
+    if (note != null)
+      s.setNote(note);
 
     return repo.save(s);
   }

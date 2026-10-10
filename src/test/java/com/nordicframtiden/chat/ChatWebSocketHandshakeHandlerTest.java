@@ -13,7 +13,7 @@ class ChatWebSocketHandshakeHandlerTest {
     ChatWebSocketHandshakeHandler handler = new ChatWebSocketHandshakeHandler();
 
     String selected = handler.selectProtocol(
-        List.of("bearer", "header.payload.signature"), new ChatWebSocketHandler(null, null));
+        List.of("bearer", "header.payload.signature"), new ChatWebSocketHandler(null, null, null));
 
     assertThat(selected).isEqualTo("bearer");
     assertThat(selected).doesNotContain("header.payload.signature");

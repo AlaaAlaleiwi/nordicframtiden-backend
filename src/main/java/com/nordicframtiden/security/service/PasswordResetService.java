@@ -162,7 +162,7 @@ public class PasswordResetService {
    */
   public void resetPassword(String rawToken, String newPassword) {
     AppUser user = tx.execute(status -> {
-      PasswordResetToken token = findValidToken(rawToken);
+      PasswordResetToken token = findValidToken(rawToken, true);
       if (token == null) {
         throw new IllegalArgumentException("Ogiltig eller utgången återställningslänk.");
       }
@@ -194,8 +194,16 @@ public class PasswordResetService {
   // ---------- helpers ----------
 
   private PasswordResetToken findValidToken(String rawToken) {
+    return findValidToken(rawToken, false);
+  }
+
+  /** {@code forUpdate}: lock the row so a concurrent reset waits and then sees it used. */
+  private PasswordResetToken findValidToken(String rawToken, boolean forUpdate) {
     if (rawToken == null || rawToken.isBlank()) return null;
-    Optional<PasswordResetToken> found = tokenRepo.findByTokenHash(PasswordResetToken.hashOf(rawToken));
+    String hash = PasswordResetToken.hashOf(rawToken);
+    Optional<PasswordResetToken> found = forUpdate
+        ? tokenRepo.findByTokenHashForUpdate(hash)
+        : tokenRepo.findByTokenHash(hash);
     if (found.isEmpty()) return null;
     PasswordResetToken token = found.get();
     if (token.isUsed() || token.getExpiresAt().isBefore(OffsetDateTime.now())) return null;

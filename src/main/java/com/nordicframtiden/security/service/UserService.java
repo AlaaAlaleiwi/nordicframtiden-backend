@@ -334,7 +334,7 @@ public class UserService {
     validateCodes(countyCode, municipalityCode);
 
     if (emailTaken(email)) throw new IllegalArgumentException("Email already exists");
-    if (profileRepo.existsByPhone(phone)) throw new IllegalArgumentException("Phone already exists");
+    if (profileRepo.existsByPhone(phone.trim())) throw new IllegalArgumentException("Phone already exists");
 
     String username = generateUniqueUsername(fullName);
     String rawPassword = generatePassword(12);
@@ -430,7 +430,9 @@ public class UserService {
     }
 
     if (phone != null && !phone.isBlank() && !phone.equals(p.getPhone())) {
-      if (profileRepo.existsByPhone(phone)) throw new IllegalArgumentException("Phone already exists");
+      // Check the value that is saved (trimmed), or a padded duplicate slips
+      // past the check and hits the unique constraint as a 500.
+      if (profileRepo.existsByPhone(phone.trim())) throw new IllegalArgumentException("Phone already exists");
       p.setPhone(phone.trim());
     }
 

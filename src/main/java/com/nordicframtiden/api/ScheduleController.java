@@ -142,7 +142,8 @@ public class ScheduleController {
         pid,
         pname,
         created.getUser().getId(),
-        u.get().getFullName(),
+        // A user without a profile still saved the shift: never 500 here.
+        u.map(profile -> profile.getFullName()).orElse(created.getUser().getUsername()),
         created.getStartAt(),
         created.getEndAt(),
         created.getNote());
@@ -183,7 +184,8 @@ public class ScheduleController {
         pid,
         pname,
         updated.getUser().getId(),
-        u.get().getFullName(),
+        // A user without a profile still saved the shift: never 500 here.
+        u.map(profile -> profile.getFullName()).orElse(updated.getUser().getUsername()),
         updated.getStartAt(),
         updated.getEndAt(),
         updated.getNote());

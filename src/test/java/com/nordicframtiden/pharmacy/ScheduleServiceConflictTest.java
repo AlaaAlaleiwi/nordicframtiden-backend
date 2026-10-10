@@ -91,6 +91,31 @@ class ScheduleServiceConflictTest {
     }
 
     @Test
+    void shiftEndingAtMidnightDoesNotClaimTheNextDayAndLocksTheUser() {
+        // Mon 16:00 -> Tue 00:00 Stockholm must only look at Monday, so it no
+        // longer conflicts with an already-booked Tuesday shift.
+        AppUser u = user();
+        when(userRepo.findById(7L)).thenReturn(Optional.of(u));
+        when(pharmacyRepo.findById(1L)).thenReturn(Optional.of(new Pharmacy()));
+        com.nordicframtiden.security.model.UserProfile profile = new com.nordicframtiden.security.model.UserProfile();
+        profile.setHourlyCost(new java.math.BigDecimal("100"));
+        when(userService.getProfileByUserId(7L)).thenReturn(profile);
+        when(shiftRepo.findByUserIdAndStartAtLessThanAndEndAtGreaterThan(
+            org.mockito.ArgumentMatchers.eq(7L), any(), any()))
+            .thenReturn(List.of());
+        when(shiftRepo.save(any(ScheduleShift.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.create(1L, 7L,
+            utc("2027-02-15T16:00:00+01:00"), utc("2027-02-16T00:00:00+01:00"), null);
+
+        var end = org.mockito.ArgumentCaptor.forClass(OffsetDateTime.class);
+        org.mockito.Mockito.verify(shiftRepo).findByUserIdAndStartAtLessThanAndEndAtGreaterThan(
+            org.mockito.ArgumentMatchers.eq(7L), end.capture(), any());
+        assertEquals(utc("2027-02-16T00:00:00+01:00").toInstant(), end.getValue().toInstant());
+        org.mockito.Mockito.verify(userRepo).lockForPayroll(7L);
+    }
+
+    @Test
     void conflictCheckUsesTheStockholmDayWindow() {
         // 09:00Z in February = 10:00 Stockholm time → day window must be
         // 2027-02-15T00:00+01:00 .. 2026-02-16T00:00+01:00 (i.e. 23:00Z bounds).

@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistration;
 import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -29,5 +30,17 @@ class ChatWebSocketConfigTest {
                 "https://nordicframtiden-frontend-mbtjtlqpcq-lz.a.run.app",
                 "https://nordicframtiden.se",
                 "https://www.nordicframtiden.se");
+    }
+
+    @Test
+    void capsInboundFramesAtChatEventSizeNowThatCallSignallingIsGone() {
+        var container = new ChatWebSocketConfig(mock(ChatWebSocketHandler.class),
+                mock(ChatWebSocketHandshakeHandler.class)).createWebSocketContainer();
+
+        assertThat(ChatWebSocketConfig.MAX_MESSAGE_BUFFER_BYTES).isEqualTo(64 * 1024);
+        assertThat(org.springframework.test.util.ReflectionTestUtils.getField(container, "maxTextMessageBufferSize"))
+                .isEqualTo(64 * 1024);
+        assertThat(org.springframework.test.util.ReflectionTestUtils.getField(container, "maxBinaryMessageBufferSize"))
+                .isEqualTo(64 * 1024);
     }
 }
