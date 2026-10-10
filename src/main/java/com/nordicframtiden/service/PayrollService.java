@@ -82,7 +82,7 @@ public NetSalaryResponse previewForUserMonth(Long userId, int year, int month, S
   BigDecimal hourlyCost = rateForCalc;
 
   int taxYear = year;
-  int taxColumn = taxService.resolveTaxColumn(profile.getYearOfBirth(), taxYear);
+  int taxColumn = taxService.resolveTaxColumn(requireYearOfBirth(profile, userId), taxYear);
   int tableNumber = taxService.resolveTableNumber(profile.getMunicipalityCode(), taxYear);
 
   var range = monthRangeUTC(year, month);
@@ -97,12 +97,15 @@ public NetSalaryResponse previewForUserMonth(Long userId, int year, int month, S
       if (!isMonthly(profile)) pay = pay.add(shiftPay(start, end, hourlyCost));
     }
   } else {
+    boolean overridden = hourlyCostOverride != null && hourlyCostOverride.signum() >= 0;
     for (var s : scheduleService.listForUser(userId, range.start(), range.end())) {
       Instant start = s.getStartAt().toInstant();
       Instant end = s.getEndAt().toInstant();
       if (!startsIn(range, start)) continue;
       totalHours = totalHours.add(hoursBetween(start, end));
-      if (!isMonthly(profile)) pay = pay.add(shiftPay(start, end, hourlyCost));
+      // An explicit preview override re-prices every shift on purpose.
+      BigDecimal shiftRate = overridden ? hourlyCost : rateOf(s, hourlyCost);
+      if (!isMonthly(profile)) pay = pay.add(shiftPay(start, end, shiftRate));
     }
   }
   // MONTHLY: gross is the fixed salary regardless of shift count.
@@ -126,6 +129,8 @@ public NetSalaryResponse netSalaryForStaffMonth(Long userId, int year, int month
       throw new IllegalArgumentException("Monthly salary missing for user " + userId);
     }
     rate = profile.getMonthlySalary();
+  } else if (profile.getHourlyCost() == null) {
+    throw new IllegalArgumentException("Hourly cost missing for user " + userId);
   }
 
   var range = monthRangeUTC(year, month);
@@ -145,7 +150,7 @@ public NetSalaryResponse netSalaryForStaffMonth(Long userId, int year, int month
   }
 
   int taxYear = year;
-  int taxColumn = taxService.resolveTaxColumn(profile.getYearOfBirth(), taxYear);
+  int taxColumn = taxService.resolveTaxColumn(requireYearOfBirth(profile, userId), taxYear);
   int tableNumber = taxService.resolveTableNumber(profile.getMunicipalityCode(), taxYear);
 
   return calculate(userId,year,month,rate,isMonthly(profile) ? "MONTHLY" : "HOURLY",isMonthly(profile) ? rate : null,totalHours,pay,taxColumn,tableNumber,profile.getMunicipalityCode());
@@ -175,7 +180,7 @@ public NetSalaryResponse netSalaryForStaffMonth(Long userId, int year, int month
       Instant end = s.getEndAt().toInstant();
       if (!startsIn(range, start)) continue;
       totalHours = totalHours.add(hoursBetween(start, end));
-      if (!isMonthly(profile)) pay = pay.add(shiftPay(start, end, rate));
+      if (!isMonthly(profile)) pay = pay.add(shiftPay(start, end, rateOf(s, rate)));
     }
     // MONTHLY: gross is the fixed salary even with zero shifts.
     if (isMonthly(profile)) {
@@ -183,7 +188,7 @@ public NetSalaryResponse netSalaryForStaffMonth(Long userId, int year, int month
     }
 
     int taxYear = year;
-    int taxColumn = taxService.resolveTaxColumn(profile.getYearOfBirth(), taxYear);
+    int taxColumn = taxService.resolveTaxColumn(requireYearOfBirth(profile, userId), taxYear);
     int tableNumber = taxService.resolveTableNumber(profile.getMunicipalityCode(), taxYear);
 
     return calculate(userId,year,month,rate,isMonthly(profile) ? "MONTHLY" : "HOURLY",isMonthly(profile) ? rate : null,totalHours,pay,taxColumn,tableNumber,profile.getMunicipalityCode());
@@ -227,6 +232,23 @@ public NetSalaryResponse netSalaryForStaffMonth(Long userId, int year, int month
     return new NetSalaryResponse(userId,String.format("%04d-%02d",year,month),hourlyCost,payType,monthlySalary == null ? null : monthlySalary.setScale(2,RoundingMode.HALF_UP),hours.setScale(2,RoundingMode.HALF_UP),taxableGross.setScale(2,RoundingMode.HALF_UP),year,municipality,table,column,tax.setScale(2,RoundingMode.HALF_UP),net.setScale(2,RoundingMode.HALF_UP),BigDecimal.valueOf(regularTaxInt).setScale(2),oneTimeTax.setScale(2),taxFree.setScale(2,RoundingMode.HALF_UP),projected.setScale(2,RoundingMode.HALF_UP),lines,pay.base().setScale(2,RoundingMode.HALF_UP),pay.saturdayOb().setScale(2,RoundingMode.HALF_UP),pay.sundayOb().setScale(2,RoundingMode.HALF_UP));
   }
 
+
+  /**
+   * The hourly rate frozen on the shift when it was booked (or reassigned),
+   * so a later raise never re-prices work already done; the current profile
+   * rate only for legacy shifts without a snapshot.
+   */
+  private static BigDecimal rateOf(com.nordicframtiden.pharmacy.ScheduleShift shift, BigDecimal profileRate) {
+    return shift.getHourlyCostSnapshot() != null ? shift.getHourlyCostSnapshot() : profileRate;
+  }
+
+  /** The tax column depends on age; a missing birth year must not surface as an NPE (500). */
+  private static int requireYearOfBirth(com.nordicframtiden.security.model.UserProfile profile, Long userId) {
+    if (profile.getYearOfBirth() == null) {
+      throw new IllegalArgumentException("Year of birth missing for user " + userId);
+    }
+    return profile.getYearOfBirth();
+  }
 
   private boolean isMonthly(com.nordicframtiden.security.model.UserProfile profile) {
     return "MONTHLY".equalsIgnoreCase(profile.getPayType());

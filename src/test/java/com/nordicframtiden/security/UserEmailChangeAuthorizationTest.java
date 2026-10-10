@@ -100,4 +100,27 @@ class UserEmailChangeAuthorizationTest {
 
     assertThat(profile.getEmail()).isEqualTo("anna.new@example.com");
   }
+
+  @Test
+  void owner_can_still_change_their_own_email_via_me() {
+    SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken(
+        "anna.svensson", null, List.of(new SimpleGrantedAuthority("ROLE_USER"))));
+    var anna = userRepo.findById(7L);
+    when(userRepo.findByUsername("anna.svensson")).thenReturn(anna);
+
+    service.updateOwnProfile("anna.svensson", null, "anna.new@example.com", null, null, null, null);
+
+    assertThat(profile.getEmail()).isEqualTo("anna.new@example.com");
+  }
+
+  @Test
+  void an_email_differing_only_in_case_counts_as_taken() {
+    loginAs("ROLE_ADMIN");
+    when(profileRepo.findByEmailIgnoreCase("Victim@Example.com")).thenReturn(Optional.of(new UserProfile()));
+
+    assertThatThrownBy(() -> changeEmail("Victim@Example.com"))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("Email already exists");
+    assertThat(profile.getEmail()).isEqualTo("anna@example.com");
+  }
 }

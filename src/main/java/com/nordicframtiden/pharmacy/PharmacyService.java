@@ -10,9 +10,18 @@ import java.util.List;
 public class PharmacyService {
 
   private final PharmacyRepository repo;
+  private final ScheduleShiftRepository shiftRepo;
+  private final java.time.Clock clock;
 
-  public PharmacyService(PharmacyRepository repo) {
+  @org.springframework.beans.factory.annotation.Autowired
+  public PharmacyService(PharmacyRepository repo, ScheduleShiftRepository shiftRepo) {
+    this(repo, shiftRepo, java.time.Clock.system(ShiftLockPolicy.ZONE));
+  }
+
+  PharmacyService(PharmacyRepository repo, ScheduleShiftRepository shiftRepo, java.time.Clock clock) {
     this.repo = repo;
+    this.shiftRepo = shiftRepo;
+    this.clock = clock;
   }
 
   public List<Pharmacy> list() {
@@ -76,6 +85,15 @@ public class PharmacyService {
   @Transactional
   public void delete(Long id) {
     Pharmacy p = repo.findById(id).orElseThrow(() -> new IllegalArgumentException("Pharmacy not found"));
+    // schedule_shift.pharmacy_id is ON DELETE CASCADE: deleting a pharmacy
+    // with worked shifts would silently erase locked payroll history.
+    java.time.OffsetDateTime todayStart = java.time.LocalDate.now(clock)
+        .atStartOfDay(ShiftLockPolicy.ZONE).toOffsetDateTime();
+    if (shiftRepo.existsWorkedShiftAtPharmacy(id, todayStart)) {
+      throw new ShiftLockedException(
+          "Apoteket har genomförda arbetspass och kan inte tas bort — historiken är låst för löne- och "
+              + "revisionsändamål. Inaktivera apoteket i stället.");
+    }
     repo.delete(p);
   }
 

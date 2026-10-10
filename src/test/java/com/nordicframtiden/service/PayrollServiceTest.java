@@ -365,4 +365,62 @@ class PayrollServiceTest {
     assertEquals(new BigDecimal("0.00"), november.totalHours());
     assertEquals(new BigDecimal("0.00"), november.grossSalary());
   }
+
+  @Test
+  void missingProfileFieldsFailWithAClearMessageInsteadOfAnNpe() {
+    UserService userService = mock(UserService.class);
+    PayrollService payrollService = new PayrollService(userService, mock(TaxService.class),
+        mock(ScheduleService.class), mock(StaffScheduleService.class),
+        mock(SalaryAdjustmentService.class), mock(OneTimeTaxService.class));
+
+    UserProfile noRate = new UserProfile();
+    noRate.setPayType("HOURLY");
+    noRate.setYearOfBirth(1990);
+    when(userService.getProfileByUserId(7L)).thenReturn(noRate);
+    var staff = org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+        () -> payrollService.netSalaryForStaffMonth(7L, 2026, 8));
+    assertEquals("Hourly cost missing for user 7", staff.getMessage());
+
+    UserProfile noBirthYear = new UserProfile();
+    noBirthYear.setPayType("HOURLY");
+    noBirthYear.setHourlyCost(BigDecimal.valueOf(200));
+    when(userService.getProfileByUserId(8L)).thenReturn(noBirthYear);
+    var user = org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+        () -> payrollService.netSalaryForUserMonth(8L, 2026, 8));
+    assertEquals("Year of birth missing for user 8", user.getMessage());
+  }
+
+  @Test
+  void shiftsArePaidAtTheRateFrozenWhenTheyWereBooked() {
+    UserService userService = mock(UserService.class);
+    TaxService taxService = mock(TaxService.class);
+    ScheduleService scheduleService = mock(ScheduleService.class);
+    SalaryAdjustmentService adjustmentService = mock(SalaryAdjustmentService.class);
+    PayrollService payrollService = new PayrollService(userService, taxService, scheduleService,
+        mock(StaffScheduleService.class), adjustmentService, mock(OneTimeTaxService.class));
+
+    UserProfile profile = new UserProfile();
+    profile.setPayType("HOURLY");
+    profile.setHourlyCost(BigDecimal.valueOf(250)); // raised after the shifts were booked
+    profile.setYearOfBirth(1990);
+    profile.setMunicipalityCode("0180");
+    when(userService.getProfileByUserId(7L)).thenReturn(profile);
+    ScheduleShift booked = new ScheduleShift(); // Monday, 8 h at the old 200 kr
+    booked.setStartAt(OffsetDateTime.parse("2026-08-03T08:00:00+02:00"));
+    booked.setEndAt(OffsetDateTime.parse("2026-08-03T16:00:00+02:00"));
+    booked.setHourlyCostSnapshot(BigDecimal.valueOf(200));
+    ScheduleShift legacy = new ScheduleShift(); // no snapshot: current rate
+    legacy.setStartAt(OffsetDateTime.parse("2026-08-04T08:00:00+02:00"));
+    legacy.setEndAt(OffsetDateTime.parse("2026-08-04T12:00:00+02:00"));
+    when(scheduleService.listForUser(eq(7L), any(), any())).thenReturn(List.of(booked, legacy));
+    when(adjustmentService.annualOneTimeTotal(eq(7L), anyInt())).thenReturn(BigDecimal.ZERO);
+    when(taxService.resolveTaxColumn(1990, 2026)).thenReturn(1);
+    when(taxService.resolveTableNumber("0180", 2026)).thenReturn(30);
+    when(taxService.lookupPreliminaryTax(anyInt(), anyInt(), anyInt(), anyInt())).thenReturn(0);
+
+    var payslip = payrollService.netSalaryForUserMonth(7L, 2026, 8);
+
+    // 8 h × 200 + 4 h × 250
+    assertEquals(new BigDecimal("2600.00"), payslip.grossSalary());
+  }
 }

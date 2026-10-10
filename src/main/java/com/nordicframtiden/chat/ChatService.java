@@ -6,6 +6,8 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -106,7 +108,7 @@ public class ChatService {
           .orElseThrow(() -> new IllegalArgumentException("User not found"));
       addMember(room, member, false);
     }
-    events.publish(roomId, "channel.members.updated", roomId);
+    afterCommit(() -> events.publish(roomId, "channel.members.updated", roomId));
     return room;
   }
 
@@ -123,7 +125,7 @@ public class ChatService {
       member.setChannelAdmin(true);
       members.save(member);
     }
-    events.publish(roomId, "channel.members.updated", roomId);
+    afterCommit(() -> events.publish(roomId, "channel.members.updated", roomId));
     return room;
   }
 
@@ -141,7 +143,7 @@ public class ChatService {
         .orElseThrow(() -> new IllegalArgumentException("Channel admin must already be a member"));
     member.setChannelAdmin(false);
     members.save(member);
-    events.publish(roomId, "channel.members.updated", roomId);
+    afterCommit(() -> events.publish(roomId, "channel.members.updated", roomId));
     return room;
   }
 
@@ -155,11 +157,13 @@ public class ChatService {
     var formerMembers = new LinkedHashSet<>(members.findUsernamesByRoomId(roomId));
     String channelName = room.getName();
     rooms.delete(room);
-    // Force all cascading deletes now. No notification is sent if the
-    // database rejects the deletion and the transaction rolls back.
+    // Force all cascading deletes now so a rejected deletion fails fast; the
+    // notifications themselves only go out once the transaction commits.
     rooms.flush();
-    events.publishTo(formerMembers, roomId, "channel.deleted", channelName);
-    notifications.notifyChannelDeleted(formerMembers, channelName);
+    afterCommit(() -> {
+      events.publishTo(formerMembers, roomId, "channel.deleted", channelName);
+      notifications.notifyChannelDeleted(formerMembers, channelName);
+    });
   }
 
   @Transactional(readOnly = true)
@@ -251,8 +255,11 @@ public class ChatService {
       attachment.setMessageId(result.getId());
       attachments.save(attachment);
     }
-    events.publish(roomId, "message.created", result.getId());
-    notifications.notifyNewMessage(result);
+    ChatMessage created = result;
+    afterCommit(() -> {
+      events.publish(roomId, "message.created", created.getId());
+      notifications.notifyNewMessage(created);
+    });
     return result;
   }
 
@@ -264,7 +271,9 @@ public class ChatService {
     message.setBody(requireText(body, 4000, "Message"));
     message.setEditedAt(Instant.now());
     message = messages.save(message);
-    events.publish(message.getRoom().getId(), "message.updated", message.getId());
+    Long roomId = message.getRoom().getId();
+    Long updatedId = message.getId();
+    afterCommit(() -> events.publish(roomId, "message.updated", updatedId));
     return message;
   }
 
@@ -276,7 +285,11 @@ public class ChatService {
     message.setDeletedAt(Instant.now());
     message.setBody("Message deleted");
     messages.save(message);
-    events.publish(message.getRoom().getId(), "message.deleted", message.getId());
+    // Deleting retracts the files too: drop the attachment rows (bytes and
+    // delivery rows go with them) so they are neither listed nor downloadable.
+    attachments.deleteByMessageId(messageId);
+    Long roomId = message.getRoom().getId();
+    afterCommit(() -> events.publish(roomId, "message.deleted", messageId));
   }
 
   @Transactional
@@ -292,7 +305,8 @@ public class ChatService {
       reaction.setMessage(message); reaction.setUser(user); reaction.setEmoji(cleanEmoji);
       reactions.save(reaction);
     }
-    events.publish(message.getRoom().getId(), "reaction.changed", messageId);
+    Long roomId = message.getRoom().getId();
+    afterCommit(() -> events.publish(roomId, "reaction.changed", messageId));
   }
 
   @Transactional
@@ -314,6 +328,21 @@ public class ChatService {
   public AppUser current(Authentication auth) {
     return users.findByUsername(auth.getName()).filter(AppUser::isEnabled)
         .orElseThrow(() -> new ChatAccessDeniedException());
+  }
+
+  /**
+   * Runs websocket/push side effects only once the surrounding transaction
+   * has committed, so clients never see (or refetch) uncommitted or
+   * rolled-back state. Without an active transaction it runs immediately.
+   */
+  private static void afterCommit(Runnable action) {
+    if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+      action.run();
+      return;
+    }
+    TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+      @Override public void afterCommit() { action.run(); }
+    });
   }
 
   private void addMember(ChatRoom room, AppUser user, boolean channelAdmin) {

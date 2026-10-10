@@ -28,13 +28,12 @@ import com.nordicframtiden.service.model.SalaryAdjustment;
 import com.nordicframtiden.service.model.SalaryAdjustmentRepository;
 import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -69,6 +68,14 @@ public class GdprService {
       List<Map<String, Object>> callHistory,
       List<Map<String, Object>> documents
   ) {}
+
+  /**
+   * "All time" bounds for the shift range queries. OffsetDateTime.MIN/MAX are
+   * outside what timestamptz (and the driver's UTC conversion) can represent,
+   * so use wide-but-valid UTC instants instead.
+   */
+  static final OffsetDateTime EXPORT_RANGE_START = OffsetDateTime.of(1900, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC);
+  static final OffsetDateTime EXPORT_RANGE_END = OffsetDateTime.of(9999, 12, 31, 23, 59, 59, 0, ZoneOffset.UTC);
 
   private final AppUserRepository userRepo;
   private final UserProfileRepository profileRepo;
@@ -205,22 +212,21 @@ public class GdprService {
       profileMap.put("municipalityCode", profile.getMunicipalityCode());
     }
 
+    // Every message the account sent, queried by sender: covers rooms the user
+    // has since left and thread replies, with no per-room cap.
     List<Map<String, Object>> messages = new ArrayList<>();
-    for (ChatRoom room : chatRooms.findVisibleTo(userId)) {
-      // Bounded per room to keep the export responsive; newest first.
-      var page = chatMessages.findByRoomIdAndParentIsNullOrderByIdDesc(
-          room.getId(), PageRequest.of(0, 200, Sort.by("id").descending()));
-      for (ChatMessage m : page) {
-        if (!user.getId().equals(m.getSender().getId())) continue;
-        Map<String, Object> message = new LinkedHashMap<>();
-        message.put("roomId", room.getId());
-        message.put("roomName", room.getName() == null ? "" : room.getName());
-        message.put("body", m.getBody());
-        message.put("createdAt", m.getCreatedAt() == null ? "" : m.getCreatedAt().toString());
-        message.put("editedAt", m.getEditedAt() == null ? "" : m.getEditedAt().toString());
-        message.put("deletedAt", m.getDeletedAt() == null ? "" : m.getDeletedAt().toString());
-        messages.add(message);
-      }
+    for (ChatMessage m : chatMessages.findAllBySenderIdForExport(userId)) {
+      ChatRoom room = m.getRoom();
+      Map<String, Object> message = new LinkedHashMap<>();
+      message.put("messageId", m.getId());
+      message.put("roomId", room == null ? null : room.getId());
+      message.put("roomName", room == null || room.getName() == null ? "" : room.getName());
+      message.put("parentMessageId", m.getParent() == null ? null : m.getParent().getId());
+      message.put("body", m.getBody());
+      message.put("createdAt", m.getCreatedAt() == null ? "" : m.getCreatedAt().toString());
+      message.put("editedAt", m.getEditedAt() == null ? "" : m.getEditedAt().toString());
+      message.put("deletedAt", m.getDeletedAt() == null ? "" : m.getDeletedAt().toString());
+      messages.add(message);
     }
 
     List<Map<String, Object>> documents = profileDocuments.findByUserIdOrderByIdDesc(userId).stream()
@@ -254,10 +260,10 @@ public class GdprService {
         user.getUsername(),
         profileMap,
         new LinkedHashMap<>(currentConsents(userId)),
-        scheduleShifts.findInRange(OffsetDateTime.MIN, OffsetDateTime.MAX, null, userId).stream()
+        scheduleShifts.findInRange(EXPORT_RANGE_START, EXPORT_RANGE_END, null, userId).stream()
             .map(this::shiftMap)
             .toList(),
-        staffShifts.findInRange(OffsetDateTime.MIN, OffsetDateTime.MAX, userId).stream()
+        staffShifts.findInRange(EXPORT_RANGE_START, EXPORT_RANGE_END, userId).stream()
             .map(this::staffShiftMap)
             .toList(),
         availabilityRequests.findByUserIdOrderByCreatedAtDesc(userId).stream()

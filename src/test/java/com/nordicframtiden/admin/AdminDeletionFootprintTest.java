@@ -168,4 +168,16 @@ class AdminDeletionFootprintTest {
             () -> service.deleteAdmin(1L));
         org.mockito.Mockito.verify(repo, org.mockito.Mockito.never()).delete(any());
     }
+
+    @Test
+    void deleting_a_dual_role_admin_with_unpaid_shifts_is_blocked() {
+        var policy = org.mockito.Mockito.mock(com.nordicframtiden.gdpr.DeletionPolicy.class);
+        when(policy.hasUnpaidShifts(1L)).thenReturn(true);
+        service.setDeletionPolicy(policy);
+
+        org.junit.jupiter.api.Assertions.assertThrows(
+            com.nordicframtiden.gdpr.UserDeletionBlockedException.class, () -> service.deleteAdmin(1L));
+        org.mockito.Mockito.verify(repo, org.mockito.Mockito.never()).delete(any());
+        org.mockito.Mockito.verify(staffShiftRepo, org.mockito.Mockito.never()).deleteByUser(any());
+    }
 }

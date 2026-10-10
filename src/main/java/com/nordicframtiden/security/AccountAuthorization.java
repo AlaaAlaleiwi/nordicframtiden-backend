@@ -36,16 +36,16 @@ public class AccountAuthorization {
     }
 
     /**
-     * Who may see the documents on a profile: admins and PERM_PEOPLE holders
-     * (same audience as canManage) plus the owner themselves.
+     * Who may see the documents on a profile: exactly the canManage audience
+     * (admins; PERM_PEOPLE holders for plain pharmacist accounts only — never
+     * admin or staff profiles) plus the owner themselves.
      */
     public boolean canViewDocuments(Authentication authentication, Long targetUserId) {
+        if (canManage(authentication, targetUserId)) {
+            return true;
+        }
         if (authentication == null || !authentication.isAuthenticated() || targetUserId == null) {
             return false;
-        }
-
-        if (hasAuthority(authentication, ADMIN) || hasAuthority(authentication, PEOPLE)) {
-            return true;
         }
 
         return userRepository.findById(targetUserId)

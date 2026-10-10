@@ -6,6 +6,7 @@ import com.nordicframtiden.security.repo.AppUserRepository;
 import com.nordicframtiden.security.repo.UserProfileRepository;
 import com.nordicframtiden.chat.ChatPushNotificationService;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.InvalidMediaTypeException;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -136,7 +137,7 @@ public class ProfileDocumentController {
         return ResponseEntity.ok()
             .header("Content-Disposition",
                 "inline; filename=\"" + doc.getFileName().replace("\"", "") + "\"")
-            .contentType(MediaType.parseMediaType(doc.getContentType()))
+            .contentType(safeMediaType(doc.getContentType()))
             .body(plaintext);
     }
 
@@ -206,6 +207,16 @@ public class ProfileDocumentController {
         return documents.findById(documentId)
             .filter(d -> d.getUser() != null && userId.equals(d.getUser().getId()))
             .orElseThrow(() -> new IllegalArgumentException("Document not found"));
+    }
+
+    /** Stored content types are client-supplied; degrade to octet-stream when malformed. */
+    static MediaType safeMediaType(String value) {
+        if (value == null || value.isBlank()) return MediaType.APPLICATION_OCTET_STREAM;
+        try {
+            return MediaType.parseMediaType(value);
+        } catch (InvalidMediaTypeException e) {
+            return MediaType.APPLICATION_OCTET_STREAM;
+        }
     }
 
     private static boolean uploadedByOwner(ProfileDocument doc, Long userId) {

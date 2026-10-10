@@ -286,6 +286,18 @@ class PayslipDeliveryServiceTest {
     }
 
     @Test
+    void queueIfReady_catchesUpAfterAMissedReadyDate() {
+        // The instance was down on Sep 21; the Sep 23 run must still queue August.
+        when(users.findAllByRole(Role.USER)).thenReturn(List.of(user));
+        when(users.findAllByRole(Role.STAFF)).thenReturn(List.of());
+        when(profiles.findByUserId(7L)).thenReturn(Optional.of(profile));
+        when(requests.findByUserIdAndWorkYearAndWorkMonthAndRole(7L, 2026, 8, "USER"))
+            .thenReturn(Optional.empty());
+
+        assertThat(service.queueIfReady(LocalDate.of(2026, 9, 23))).isEqualTo(1);
+    }
+
+    @Test
     void queueIfReady_queuesOnlyOncePerAccountAndMonth() {
         when(users.findAllByRole(Role.USER)).thenReturn(List.of(user));
         when(users.findAllByRole(Role.STAFF)).thenReturn(List.of());

@@ -138,7 +138,7 @@ public class SalariesController {
   /**
    * Reopen an accidentally finalized payslip as a draft (removes the snapshot
    * + revisions). Allowed only for the current month, or the previous month
-   * through the 20th — the same windows as editing.
+   * until its payslip ready date — the same windows as editing.
    */
   @DeleteMapping("/payslip/finalize")
   @PreAuthorize(CAN_MANAGE_SALARIES)
@@ -193,7 +193,16 @@ public NetSalaryResponse payslipForStaff(
       @RequestParam int month,
       Authentication auth
   ) {
-    return payslipFreezeService.resolve(currentUserId(auth), year, month, "USER");
+    Long userId = currentUserId(auth);
+    return payslipFreezeService.resolve(userId, year, month, selfPayrollRole(userId));
+  }
+
+  /**
+   * Payroll role of the caller's own payslip: STAFF accounts are paid from
+   * staff shifts, everyone else (pharmacists, dual-role) from schedule shifts.
+   */
+  private String selfPayrollRole(Long userId) {
+    return hasRole(userId, Role.STAFF) && !hasRole(userId, Role.USER) ? "STAFF" : "USER";
   }
 
   /**
@@ -210,7 +219,8 @@ public NetSalaryResponse payslipForStaff(
     java.time.LocalDate readyDate = payslipDeliveryService.readyDateFor(payoutMonth);
 
     boolean ready = !today.isBefore(readyDate);
-    var delivered = payslipDeliveryService.lastDelivered(currentUserId(auth), "USER");
+    Long userId = currentUserId(auth);
+    var delivered = payslipDeliveryService.lastDelivered(userId, selfPayrollRole(userId));
 
     // Map.of rejects null values. Before the first successful delivery there
     // is no lastDeliveredMonth, so use a mutable map to return JSON null rather
@@ -290,13 +300,15 @@ public NetSalaryResponse payslipForStaff(
     // person so the salary lists agree with the payslip gross on all
     // platforms. Tax-free adjustments count toward the cost too — they are
     // pay, only the tax treatment differs.
+    // MONTHLY employees: the payslip gross is the fixed salary, not
+    // hours × rate, so their salary entries must not depend on shifts.
+    // Upsert their fixed-salary rows (hours stay informational). This runs
+    // BEFORE the adjustments: it replaces the cost, so running it after would
+    // drop a monthly employee's bonuses from the list.
+    summaries = withMonthlySalaries(summaries, role);
     if (adjustmentService != null) {
       summaries = withPayslipAdjustments(summaries, lines, start, end, role);
     }
-    // MONTHLY employees: the payslip gross is the fixed salary, not
-    // hours × rate, so their salary entries must not depend on shifts.
-    // Upsert their fixed-salary rows (hours stay informational).
-    summaries = withMonthlySalaries(summaries, role);
     return summaries;
   }
 
@@ -383,7 +395,9 @@ public NetSalaryResponse payslipForStaff(
     java.util.Set<java.time.YearMonth> months = new java.util.HashSet<>();
     java.time.OffsetDateTime cursor = start;
     while (cursor.isBefore(end) && months.size() < 24) {
-      months.add(java.time.YearMonth.from(cursor));
+      // Payroll months are Stockholm months: a client sending Stockholm
+      // midnight as UTC (e.g. 2026-09-30T22:00Z) still means October.
+      months.add(java.time.YearMonth.from(cursor.atZoneSameInstant(STOCKHOLM)));
       cursor = cursor.plusMonths(1);
     }
     if (months.isEmpty()) return summaries;
@@ -423,7 +437,7 @@ public NetSalaryResponse payslipForStaff(
             : BigDecimal.ZERO;
         double hours = user.hours();
         BigDecimal cost = user.totalCost().add(extra);
-        BigDecimal hourly = hours > 0
+        BigDecimal hourly = hours > 0 && !"MONTHLY".equals(user.payType())
             ? cost.divide(BigDecimal.valueOf(hours), 2, RoundingMode.HALF_UP)
             : user.hourlyCost();
         users.add(new UserSummary(user.userId(), user.fullName(), hours, hourly,
@@ -433,7 +447,8 @@ public NetSalaryResponse payslipForStaff(
       }
       if (pharmacy.pharmacyId() == 0L) {
         for (Long userId : adjustmentTotals.keySet()) {
-          if (peopleInRole.contains(userId) || !isUserInSalaryRole(userId, role)) continue;
+          if (peopleInRole.contains(userId) || adjustmentsApplied.contains(userId)
+              || !isUserInSalaryRole(userId, role)) continue;
           BigDecimal cost = adjustmentTotals.getOrDefault(userId, BigDecimal.ZERO);
           users.add(new UserSummary(userId, salaryEmployeeName(userId), 0, BigDecimal.ZERO,
               payTypeOf(userId), null, cost));
@@ -599,13 +614,16 @@ public NetSalaryResponse payslipForStaff(
   }
 
   private List<MonthRow> monthsForUser(Long userId, int year) {
-    OffsetDateTime start = OffsetDateTime.parse(year + "-01-01T00:00:00Z");
-    OffsetDateTime end = OffsetDateTime.parse((year + 1) + "-01-01T00:00:00Z");
+    // Stockholm boundaries, and each shift counts in the month it starts in —
+    // the same rule as the payslip.
+    OffsetDateTime start = LocalDate.of(year, 1, 1).atStartOfDay(STOCKHOLM).toOffsetDateTime();
+    OffsetDateTime end = start.atZoneSameInstant(STOCKHOLM).plusYears(1).toOffsetDateTime();
 
     return shiftRepo.findInRange(start, end, null, userId)
         .stream()
+        .filter(s -> !s.getStartAt().isBefore(start) && s.getStartAt().isBefore(end))
         .map(this::toUserLine)
-        .collect(Collectors.groupingBy(l -> l.startAt().getMonthValue()))
+        .collect(Collectors.groupingBy(l -> l.startAt().atZoneSameInstant(STOCKHOLM).getMonthValue()))
         .entrySet().stream()
         .map(e -> new MonthRow(
             year,
@@ -634,15 +652,14 @@ public NetSalaryResponse payslipForStaff(
   }
 
   private List<DayRow> monthDaysForUser(Long userId, int year, int month) {
-    String mm = String.format("%02d", month);
-    OffsetDateTime start = OffsetDateTime.parse(year + "-" + mm + "-01T00:00:00Z");
-    OffsetDateTime end = month == 12
-        ? OffsetDateTime.parse((year + 1) + "-01-01T00:00:00Z")
-        : OffsetDateTime.parse(year + "-" + String.format("%02d", month + 1) + "-01T00:00:00Z");
+    OffsetDateTime start = LocalDate.of(year, month, 1).atStartOfDay(STOCKHOLM).toOffsetDateTime();
+    OffsetDateTime end = start.atZoneSameInstant(STOCKHOLM).plusMonths(1).toOffsetDateTime();
 
     return shiftRepo.findInRange(start, end, null, userId)
-        .stream().map(this::toUserLine)
-        .collect(Collectors.groupingBy(l -> l.startAt().toLocalDate().toString()))
+        .stream()
+        .filter(s -> !s.getStartAt().isBefore(start) && s.getStartAt().isBefore(end))
+        .map(this::toUserLine)
+        .collect(Collectors.groupingBy(l -> l.startAt().atZoneSameInstant(STOCKHOLM).toLocalDate().toString()))
         .entrySet().stream()
         .map(e -> new DayRow(
             e.getKey(),

@@ -456,6 +456,84 @@ class SalariesControllerSecurityTest {
         verify(emailService, never()).sendSalaryPdfEmail(any(), any(), any(), any());
     }
 
+    @Test
+    @WithMockUser(username = "erik", roles = "STAFF")
+    void staffEmployeeReadsTheirOwnPayslipFromStaffShifts() throws Exception {
+        AppUser erik = new AppUser();
+        erik.setId(9L);
+        erik.setUsername("erik");
+        erik.setRoles(Set.of(Role.STAFF));
+        when(userRepo.findByUsername("erik")).thenReturn(Optional.of(erik));
+        when(userRepo.findById(9L)).thenReturn(Optional.of(erik));
+        when(payslipFreezeService.resolve(9L, 2026, 8, "STAFF")).thenReturn(payslip(9L));
+
+        mvc.perform(get("/api/salaries/payslip/me").param("year", "2026").param("month", "8"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.userId").value(9));
+        verify(payslipFreezeService, never()).resolve(9L, 2026, 8, "USER");
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void monthlyEmployeeKeepsTheirAdjustmentsInTheSalaryList() throws Exception {
+        when(shiftRepo.findInRange(any(), any(), eq(null), eq(null))).thenReturn(List.of());
+        UserProfileRepository.MonthlySalaryProfile monthly = new UserProfileRepository.MonthlySalaryProfile() {
+            @Override public Long getUserId() { return 42L; }
+            @Override public String getFullName() { return "Monthly Person"; }
+            @Override public BigDecimal getMonthlySalary() { return new BigDecimal("28000"); }
+        };
+        when(profileRepo.findMonthlySalaryProfilesByRole(Role.USER)).thenReturn(List.of(monthly));
+        com.nordicframtiden.service.model.SalaryAdjustment bonus =
+            new com.nordicframtiden.service.model.SalaryAdjustment();
+        bonus.setUserId(42L);
+        bonus.setYear(2026);
+        bonus.setMonth(8);
+        bonus.setName("Bonus");
+        bonus.setAmount(new BigDecimal("5000"));
+        bonus.setTaxTreatment(com.nordicframtiden.service.model.SalaryAdjustment.TaxTreatment.REGULAR_TAXABLE);
+        when(adjustmentService.forMonth(2026, 8)).thenReturn(List.of(bonus));
+        AppUser person = new AppUser();
+        person.setId(42L);
+        person.setRoles(Set.of(Role.USER));
+        when(userRepo.findById(42L)).thenReturn(Optional.of(person));
+
+        mvc.perform(get("/api/salaries/month")
+                .param("start", "2026-08-01T00:00:00+02:00")
+                .param("end", "2026-09-01T00:00:00+02:00"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.length()").value(1))
+            .andExpect(jsonPath("$[0].users.length()").value(1))
+            .andExpect(jsonPath("$[0].users[0].totalCost").value(33000.00));
+    }
+
+    @Test
+    @WithMockUser(username = "alice", roles = "USER")
+    void ownMonthViewUsesStockholmDaysAndMonths() throws Exception {
+        AppUser alice = new AppUser();
+        alice.setId(7L);
+        alice.setUsername("alice");
+        when(userRepo.findByUsername("alice")).thenReturn(Optional.of(alice));
+        com.nordicframtiden.pharmacy.Pharmacy pharmacy = mock(com.nordicframtiden.pharmacy.Pharmacy.class);
+        com.nordicframtiden.pharmacy.ScheduleShift shift = new com.nordicframtiden.pharmacy.ScheduleShift();
+        shift.setUser(alice);
+        shift.setPharmacy(pharmacy);
+        // Oct 1, 00:30–08:30 in Stockholm, stored as UTC on Sep 30.
+        shift.setStartAt(java.time.OffsetDateTime.parse("2026-09-30T22:30:00Z"));
+        shift.setEndAt(java.time.OffsetDateTime.parse("2026-10-01T06:30:00Z"));
+        shift.setHourlyCostSnapshot(new BigDecimal("200"));
+        when(shiftRepo.findInRange(any(), any(), eq(null), eq(7L))).thenReturn(List.of(shift));
+
+        mvc.perform(get("/api/salaries/me/month").param("year", "2026").param("month", "10"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$[0].dayKey").value("2026-10-01"));
+        mvc.perform(get("/api/salaries/me/month").param("year", "2026").param("month", "9"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.length()").value(0));
+        mvc.perform(get("/api/salaries/me/months").param("year", "2026"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$[0].month").value(10));
+    }
+
     private static UserProfileRepository.UserProfileSummary profileSummary(
             Long userId, String fullName, BigDecimal hourlyCost, String payType, BigDecimal monthlySalary) {
         return new UserProfileRepository.UserProfileSummary() {

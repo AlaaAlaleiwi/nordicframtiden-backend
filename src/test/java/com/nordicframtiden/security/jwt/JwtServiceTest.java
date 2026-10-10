@@ -21,7 +21,10 @@ class JwtServiceTest {
 
     @Test
     void generatedTokenIsExplicitlyAnAccessToken() {
-        String token = jwtService.generateAccessToken("alice", Map.of());
+        com.nordicframtiden.security.model.AppUser alice = new com.nordicframtiden.security.model.AppUser();
+        alice.setId(1L);
+        alice.setUsername("alice");
+        String token = jwtService.generateAccessToken(alice, Map.of());
 
         assertThat(jwtService.validateAccessToken(token).get("type")).isEqualTo("access");
     }
@@ -40,5 +43,25 @@ class JwtServiceTest {
 
         assertThatThrownBy(() -> jwtService.validateAccessToken(refreshToken))
             .isInstanceOf(JwtException.class);
+    }
+
+    @Test
+    void disablingOrLoggingOutEverywhereRevokesRefreshTokens() {
+        com.nordicframtiden.security.model.AppUser alice = new com.nordicframtiden.security.model.AppUser();
+        alice.setId(1L);
+        alice.setUsername("alice");
+        var users = org.mockito.Mockito.mock(com.nordicframtiden.security.repo.AppUserRepository.class);
+        org.mockito.Mockito.when(users.findById(1L)).thenReturn(java.util.Optional.of(alice));
+
+        var first = jwtService.validateRefreshToken(jwtService.generateRefreshToken(alice));
+        assertThat(jwtService.currentUser(first, users)).contains(alice);
+
+        alice.revokeTokens(); // POST /auth/logout-all
+        assertThat(jwtService.currentUser(first, users)).isEmpty();
+
+        var second = jwtService.validateRefreshToken(jwtService.generateRefreshToken(alice));
+        alice.setEnabled(false);
+        alice.setEnabled(true); // re-enabling never revives tokens from before
+        assertThat(jwtService.currentUser(second, users)).isEmpty();
     }
 }

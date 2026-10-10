@@ -228,4 +228,58 @@ class DeletionPolicyTest {
     assertThat(info.blockFrom()).isNull();
     assertThat(info.blockUntil()).isNull();
   }
+
+  // ----- Scheduled date bounds the block; payroll is paid before deletion -----
+
+  private OffsetDateTime monthStart(String isoDate) {
+    return LocalDate.parse(isoDate).atStartOfDay(DeletionPolicy.ZONE).toOffsetDateTime();
+  }
+
+  @Test
+  void approvedDeletionCapsNewShiftsAtTheLastMonthPaidBeforeIt() {
+    // Deletion on Oct 31: September is paid Oct 21 (before), October is not.
+    openRequest.setStatus(GdprDeletionRequest.STATUS_APPROVED);
+    openRequest.setScheduledDate(LocalDate.parse("2026-10-31"));
+    withOpenRequest(true);
+
+    assertThat(policy.shiftBlock(7L).blockUntil()).isEqualTo(LocalDate.parse("2026-09-30"));
+    policy.assertShiftsAllowed(7L, OffsetDateTime.parse("2026-09-28T09:00:00Z"));
+    assertThatThrownBy(() -> policy.assertShiftsAllowed(7L, OffsetDateTime.parse("2026-10-05T09:00:00Z")))
+        .isInstanceOf(DeletionShiftBlockException.class);
+  }
+
+  @Test
+  void deletionOnOrBeforeTheReadyDateDoesNotCountThatMonthAsPaid() {
+    // Oct 21 is September's ready date; deletion runs before delivery that day.
+    assertThat(DeletionPolicy.lastWorkMonthPaidBefore(LocalDate.parse("2026-10-21")))
+        .isEqualTo(java.time.YearMonth.of(2026, 8));
+    assertThat(DeletionPolicy.lastWorkMonthPaidBefore(LocalDate.parse("2026-10-22")))
+        .isEqualTo(java.time.YearMonth.of(2026, 9));
+  }
+
+  @Test
+  void suggestionCoversShiftsBookedBeyondNextMonth() {
+    // A December shift booked before the request was filed must be paid
+    // (in January) before the account is deleted.
+    when(scheduleShifts.findInRange(any(), any(), isNull(), eq(7L)))
+        .thenReturn(List.of(scheduleShift("2026-12-10T08:00:00Z")));
+
+    assertThat(policy.suggestedDeletionDate(7L)).isEqualTo(LocalDate.parse("2027-01-31"));
+  }
+
+  @Test
+  void lastMonthsShiftsStayUnpaidUntilAfterTheirReadyDate() {
+    // Today Sep 15: August's payslip is delivered Sep 21.
+    when(scheduleShifts.findInRange(eq(monthStart("2026-09-01")), any(), isNull(), eq(7L)))
+        .thenReturn(List.of());
+    when(scheduleShifts.findInRange(eq(monthStart("2026-08-01")), any(), isNull(), eq(7L)))
+        .thenReturn(List.of(scheduleShift("2026-08-20T08:00:00Z")));
+
+    assertThat(policy.hasShiftsInCurrentMonth(7L)).isFalse();
+    assertThat(policy.hasUnpaidShifts(7L)).isTrue();
+
+    DeletionPolicy afterPayday = new DeletionPolicy(requests, scheduleShifts, staffShifts,
+        Clock.fixed(Instant.parse("2026-09-22T12:00:00Z"), ZoneId.of("Europe/Stockholm")));
+    assertThat(afterPayday.hasUnpaidShifts(7L)).isFalse();
+  }
 }

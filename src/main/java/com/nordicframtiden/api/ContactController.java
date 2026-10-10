@@ -12,7 +12,9 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api/contact")
-@PreAuthorize("hasAnyRole('ADMIN', 'STAFF')")
+// Submitters' personal data: staff need the CONTACTS permission, like every
+// other staff area (PEOPLE, SALARIES, ...).
+@PreAuthorize("hasRole('ADMIN') or (hasRole('STAFF') and hasAuthority('PERM_CONTACTS'))")
 public class ContactController {
 
   private final ContactRequestService service;
@@ -91,7 +93,7 @@ public class ContactController {
   public record HandleRequest(Boolean handled, String adminNote) {}
 
   @PutMapping("/{id}/handled")
-  @PreAuthorize("hasAnyRole('ADMIN', 'STAFF')")
+  @PreAuthorize("hasRole('ADMIN') or (hasRole('STAFF') and hasAuthority('PERM_CONTACTS'))")
   public ContactResponse markHandled(@PathVariable Long id, @RequestBody HandleRequest req, Authentication authentication) {
     boolean handled = req.handled() != null && req.handled();
     // Spring Security puts the JWT subject (username) in the principal.

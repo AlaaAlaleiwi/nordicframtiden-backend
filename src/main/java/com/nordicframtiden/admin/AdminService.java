@@ -93,6 +93,25 @@ public class AdminService {
         this.resetTokenRepo = resetTokenRepo;
     }
 
+    /**
+     * Password reset resolves an email case-insensitively across admin AND
+     * user profiles and needs exactly one match: refuse duplicates the same way.
+     */
+    private boolean emailTaken(String email) {
+        if (email == null) return false;
+        String trimmed = email.trim();
+        return adminProfileRepo.findByEmailIgnoreCase(trimmed).isPresent()
+            || userProfileRepo.findByEmailIgnoreCase(trimmed).isPresent();
+    }
+
+    private com.nordicframtiden.gdpr.DeletionPolicy deletionPolicy;
+
+    /** Optional so the many unit-test constructions stay unchanged. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setDeletionPolicy(com.nordicframtiden.gdpr.DeletionPolicy deletionPolicy) {
+        this.deletionPolicy = deletionPolicy;
+    }
+
     public record AdminRow(
             Long id,
             String username,
@@ -171,7 +190,7 @@ public class AdminService {
             String email,
             String phone) {
 
-        if (adminProfileRepo.existsByEmail(email))
+        if (emailTaken(email))
             throw new IllegalArgumentException("Email already exists");
 
         if (adminProfileRepo.existsByPhone(phone))
@@ -246,7 +265,7 @@ public class AdminService {
             if (fullName != null && !fullName.isBlank()) profile.setFullName(fullName.trim());
 
             if (email != null && !email.isBlank() && !email.equalsIgnoreCase(profile.getEmail())) {
-                if (adminProfileRepo.existsByEmail(email)) {
+                if (emailTaken(email)) {
                     throw new IllegalArgumentException("Email already exists");
                 }
                 profile.setEmail(email.trim());
@@ -278,7 +297,7 @@ public class AdminService {
         if (fullName != null && !fullName.isBlank()) userProfile.setFullName(fullName.trim());
 
         if (email != null && !email.isBlank() && !email.equalsIgnoreCase(userProfile.getEmail())) {
-            if (userProfileRepo.existsByEmail(email)) {
+            if (emailTaken(email)) {
                 throw new IllegalArgumentException("Email already exists");
             }
             userProfile.setEmail(email.trim());
@@ -393,6 +412,15 @@ public class AdminService {
         long admins = repo.countByRole(Role.ADMIN);
         if (admins <= 1) {
             throw new IllegalArgumentException("Cannot delete the last remaining admin account");
+        }
+        // Dual-role ADMIN+USER/STAFF accounts work shifts: same unpaid-payroll
+        // guard as UserService.deleteUser (this path is also reached directly
+        // from the admin management API).
+        if (deletionPolicy != null && deletionPolicy.hasUnpaidShifts(id)) {
+            throw new com.nordicframtiden.gdpr.UserDeletionBlockedException(
+                "Radering blockerad: användaren har arbetspass som ännu inte har betalats ut. "
+                    + "Använd raderingsbegäranden i stället — raderingen schemaläggs automatiskt "
+                    + "efter sista lönemånaden.");
         }
 
         // Delete rooms created by this admin; messages inside cascade with the room.

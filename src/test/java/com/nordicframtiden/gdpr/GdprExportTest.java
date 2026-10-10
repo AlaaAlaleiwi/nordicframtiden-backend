@@ -100,7 +100,7 @@ class GdprExportTest {
   void export_contains_profile_identity_and_contact_data() {
     when(userRepo.findById(7L)).thenReturn(Optional.of(user));
     when(profileRepo.findByUserId(7L)).thenReturn(Optional.of(profile()));
-    when(chatRooms.findVisibleTo(7L)).thenReturn(List.of());
+    when(chatMessages.findAllBySenderIdForExport(7L)).thenReturn(List.of());
     when(availabilityRequests.findByUserIdOrderByCreatedAtDesc(7L)).thenReturn(List.of());
     when(profileDocuments.findByUserIdOrderByIdDesc(7L)).thenReturn(List.of());
     when(scheduleShifts.findInRange(any(), any(), any(), any())).thenReturn(List.of());
@@ -145,9 +145,7 @@ class GdprExportTest {
     theirs.setSender(other);
     theirs.setBody("someone else's message");
 
-    when(chatRooms.findVisibleTo(7L)).thenReturn(List.of(room));
-    when(chatMessages.findByRoomIdAndParentIsNullOrderByIdDesc(
-        any(), any())).thenReturn(List.of(mine, theirs));
+    when(chatMessages.findAllBySenderIdForExport(7L)).thenReturn(List.of(mine));
     when(availabilityRequests.findByUserIdOrderByCreatedAtDesc(7L)).thenReturn(List.of());
     when(profileDocuments.findByUserIdOrderByIdDesc(7L)).thenReturn(List.of());
     when(scheduleShifts.findInRange(any(), any(), any(), any())).thenReturn(List.of());
@@ -163,10 +161,93 @@ class GdprExportTest {
   }
 
   @Test
+  void export_includes_messages_from_left_rooms_and_thread_replies() {
+    when(userRepo.findById(7L)).thenReturn(Optional.of(user));
+    when(profileRepo.findByUserId(7L)).thenReturn(Optional.empty());
+
+    // A room the user has since left: no longer returned by findVisibleTo.
+    ChatRoom leftRoom = new ChatRoom();
+    leftRoom.setId(11L);
+    leftRoom.setName("Old team");
+    ChatRoom currentRoom = new ChatRoom();
+    currentRoom.setId(12L);
+    currentRoom.setName("Current team");
+
+    ChatMessage inLeftRoom = new ChatMessage();
+    inLeftRoom.setId(20L);
+    inLeftRoom.setRoom(leftRoom);
+    inLeftRoom.setSender(user);
+    inLeftRoom.setBody("before I left");
+
+    ChatMessage parent = new ChatMessage();
+    parent.setId(30L);
+    parent.setRoom(currentRoom);
+
+    ChatMessage reply = new ChatMessage();
+    reply.setId(31L);
+    reply.setRoom(currentRoom);
+    reply.setSender(user);
+    reply.setParent(parent);
+    reply.setBody("thread reply");
+
+    lenient().when(chatRooms.findVisibleTo(7L)).thenReturn(List.of(currentRoom));
+    when(chatMessages.findAllBySenderIdForExport(7L)).thenReturn(List.of(inLeftRoom, reply));
+    when(availabilityRequests.findByUserIdOrderByCreatedAtDesc(7L)).thenReturn(List.of());
+    when(profileDocuments.findByUserIdOrderByIdDesc(7L)).thenReturn(List.of());
+    when(scheduleShifts.findInRange(any(), any(), any(), any())).thenReturn(List.of());
+    when(staffShifts.findInRange(any(), any(), any())).thenReturn(List.of());
+    when(payslipSnapshots.findByUserId(7L)).thenReturn(List.of());
+    when(salaryAdjustments.findByUserId(7L)).thenReturn(List.of());
+
+    GdprService.GdprExport export = service.export(7L);
+
+    assertThat(export.chatMessages()).hasSize(2);
+    assertThat(export.chatMessages().get(0))
+        .containsEntry("roomId", 11L)
+        .containsEntry("roomName", "Old team")
+        .containsEntry("body", "before I left")
+        .containsEntry("parentMessageId", null);
+    assertThat(export.chatMessages().get(1))
+        .containsEntry("roomId", 12L)
+        .containsEntry("body", "thread reply")
+        .containsEntry("parentMessageId", 30L);
+  }
+
+  @Test
+  void export_shift_queries_use_bounds_representable_as_timestamptz() {
+    when(userRepo.findById(7L)).thenReturn(Optional.of(user));
+    when(profileRepo.findByUserId(7L)).thenReturn(Optional.empty());
+    when(chatMessages.findAllBySenderIdForExport(7L)).thenReturn(List.of());
+    when(availabilityRequests.findByUserIdOrderByCreatedAtDesc(7L)).thenReturn(List.of());
+    when(profileDocuments.findByUserIdOrderByIdDesc(7L)).thenReturn(List.of());
+    when(scheduleShifts.findInRange(any(), any(), any(), any())).thenReturn(List.of());
+    when(staffShifts.findInRange(any(), any(), any())).thenReturn(List.of());
+    when(payslipSnapshots.findByUserId(7L)).thenReturn(List.of());
+    when(salaryAdjustments.findByUserId(7L)).thenReturn(List.of());
+
+    service.export(7L);
+
+    var start = org.mockito.ArgumentCaptor.forClass(OffsetDateTime.class);
+    var end = org.mockito.ArgumentCaptor.forClass(OffsetDateTime.class);
+    org.mockito.Mockito.verify(scheduleShifts).findInRange(start.capture(), end.capture(), any(), org.mockito.ArgumentMatchers.eq(7L));
+    org.mockito.Mockito.verify(staffShifts).findInRange(start.capture(), end.capture(), org.mockito.ArgumentMatchers.eq(7L));
+    for (OffsetDateTime t : start.getAllValues()) {
+      assertThat(t).isNotEqualTo(OffsetDateTime.MIN);
+      assertThat(t.getOffset()).isEqualTo(java.time.ZoneOffset.UTC);
+      assertThat(t.getYear()).isLessThanOrEqualTo(1900);
+    }
+    for (OffsetDateTime t : end.getAllValues()) {
+      assertThat(t).isNotEqualTo(OffsetDateTime.MAX);
+      assertThat(t.getOffset()).isEqualTo(java.time.ZoneOffset.UTC);
+      assertThat(t.getYear()).isGreaterThanOrEqualTo(9999);
+    }
+  }
+
+  @Test
   void export_covers_shifts_availability_adjustments_calls_and_documents() {
     when(userRepo.findById(7L)).thenReturn(Optional.of(user));
     when(profileRepo.findByUserId(7L)).thenReturn(Optional.empty());
-    when(chatRooms.findVisibleTo(7L)).thenReturn(List.of());
+    when(chatMessages.findAllBySenderIdForExport(7L)).thenReturn(List.of());
 
     ScheduleShift shift = new ScheduleShift();
     shift.setStartAt(OffsetDateTime.parse("2026-09-01T09:00:00+02:00"));

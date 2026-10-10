@@ -2,6 +2,7 @@ package com.nordicframtiden.api;
 
 import com.nordicframtiden.company.StaffScheduleService;
 import com.nordicframtiden.company.StaffShift;
+import com.nordicframtiden.security.repo.UserProfileRepository;
 import com.nordicframtiden.settings.EmailService;
 import jakarta.validation.constraints.NotNull;
 import org.springframework.http.HttpStatus;
@@ -22,10 +23,13 @@ public class StaffScheduleController {
 
   private final StaffScheduleService service;
   private final EmailService emailService;
+  private final UserProfileRepository profileRepo;
 
-  public StaffScheduleController(StaffScheduleService service, EmailService emailService) {
+  public StaffScheduleController(StaffScheduleService service, EmailService emailService,
+      UserProfileRepository profileRepo) {
     this.service = service;
     this.emailService = emailService;
+    this.profileRepo = profileRepo;
   }
 
   public record EventDto(
@@ -109,16 +113,24 @@ public class StaffScheduleController {
   @PostMapping("/send-pdf-email")
   public ResponseEntity<Map<String, Object>> sendSchedulePdfEmail(@RequestBody Map<String, Object> payload) {
     Long userId = payload.get("userId") instanceof Number n ? n.longValue() : null;
-    String email = payload.get("email") == null ? "" : String.valueOf(payload.get("email")).trim();
-    String employeeName = payload.get("employeeName") == null ? "" : String.valueOf(payload.get("employeeName")).trim();
     String pdfBase64 = payload.get("pdfBase64") == null ? "" : String.valueOf(payload.get("pdfBase64")).trim();
     String startIso = payload.get("startDate") == null ? null : String.valueOf(payload.get("startDate")).trim();
     String endIso = payload.get("endDate") == null ? null : String.valueOf(payload.get("endDate")).trim();
 
-    if (userId == null || email.isBlank() || !email.contains("@") || pdfBase64.isBlank()) {
+    if (userId == null || pdfBase64.isBlank()) {
       return ResponseEntity.status(HttpStatus.BAD_REQUEST)
           .body(Map.of("error", "Missing required fields to send the schedule PDF email."));
     }
+
+    // The recipient is the employee's stored email, never a caller-supplied
+    // address: the company sender must not mail arbitrary files anywhere.
+    var profile = profileRepo.findByUserId(userId).orElse(null);
+    String email = profile == null || profile.getEmail() == null ? "" : profile.getEmail().trim();
+    if (email.isBlank() || !email.contains("@")) {
+      return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+          .body(Map.of("error", "The employee does not have a valid profile email."));
+    }
+    String employeeName = profile.getFullName() == null ? "" : profile.getFullName().trim();
 
     byte[] pdfBytes;
     try {
@@ -140,13 +152,15 @@ public class StaffScheduleController {
         end
     );
 
-    return ResponseEntity.ok(Map.of(
-        "sent", sent,
-        "recipient", email,
-        "employeeName", employeeName.isBlank() ? "Staff member" : employeeName,
-        "startDate", startIso,
-        "endDate", endIso,
-        "filename", "schedule-" + (startIso == null ? "period" : startIso.substring(0, 10)) + ".pdf"
-    ));
+    // Map.of rejects null values, and the dates are optional: a missing date
+    // must come back as JSON null, not a 500.
+    Map<String, Object> body = new java.util.LinkedHashMap<>();
+    body.put("sent", sent);
+    body.put("recipient", email);
+    body.put("employeeName", employeeName.isBlank() ? "Staff member" : employeeName);
+    body.put("startDate", startIso);
+    body.put("endDate", endIso);
+    body.put("filename", "schedule-" + (startIso == null || startIso.length() < 10 ? "period" : startIso.substring(0, 10)) + ".pdf");
+    return ResponseEntity.ok(body);
   }
 }

@@ -7,7 +7,10 @@ import org.springframework.data.domain.PageRequest;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import java.util.List;
 import java.util.Optional;
@@ -248,6 +251,78 @@ class ChatServiceTest {
 
     assertThatThrownBy(() -> service.messageForUser(authentication("erik"), 99L))
         .isInstanceOf(ChatAccessDeniedException.class);
+  }
+
+  @Test
+  void deleteRetractsTheMessagesAttachments() {
+    ChatRoomRepository rooms = mock(ChatRoomRepository.class);
+    ChatRoomMemberRepository members = mock(ChatRoomMemberRepository.class);
+    ChatMessageRepository messages = mock(ChatMessageRepository.class);
+    ChatReactionRepository reactions = mock(ChatReactionRepository.class);
+    ChatAttachmentRepository attachments = mock(ChatAttachmentRepository.class);
+    AppUserRepository users = mock(AppUserRepository.class);
+    ChatEventPublisher events = mock(ChatEventPublisher.class);
+    ChatPushNotificationService notifications = mock(ChatPushNotificationService.class);
+    ChatService service = new ChatService(rooms, members, messages, reactions, users, events, notifications, attachments);
+    AppUser author = user(7L, "anna");
+    ChatRoom room = new ChatRoom();
+    room.setId(12L);
+    ChatMessage message = message(99L);
+    message.setSender(author);
+    message.setRoom(room);
+
+    when(users.findByUsername("anna")).thenReturn(Optional.of(author));
+    when(messages.findById(99L)).thenReturn(Optional.of(message));
+
+    service.delete(authentication("anna"), 99L);
+
+    assertThat(message.getDeletedAt()).isNotNull();
+    verify(attachments).deleteByMessageId(99L);
+    verify(events).publish(12L, "message.deleted", 99L);
+  }
+
+  @Test
+  void sendDefersWebsocketEventAndPushUntilCommit() {
+    ChatRoomRepository rooms = mock(ChatRoomRepository.class);
+    ChatRoomMemberRepository members = mock(ChatRoomMemberRepository.class);
+    ChatMessageRepository messages = mock(ChatMessageRepository.class);
+    ChatReactionRepository reactions = mock(ChatReactionRepository.class);
+    ChatAttachmentRepository attachments = mock(ChatAttachmentRepository.class);
+    AppUserRepository users = mock(AppUserRepository.class);
+    ChatEventPublisher events = mock(ChatEventPublisher.class);
+    ChatPushNotificationService notifications = mock(ChatPushNotificationService.class);
+    ChatService service = new ChatService(rooms, members, messages, reactions, users, events, notifications, attachments);
+    AppUser user = user(7L, "anna");
+    ChatRoom room = new ChatRoom();
+    room.setId(12L);
+
+    when(users.findByUsername("anna")).thenReturn(Optional.of(user));
+    when(rooms.findById(12L)).thenReturn(Optional.of(room));
+    when(members.existsByRoomIdAndUserId(12L, 7L)).thenReturn(true);
+    when(messages.save(org.mockito.ArgumentMatchers.any())).thenAnswer(invocation -> {
+      ChatMessage saved = invocation.getArgument(0);
+      saved.setId(99L);
+      return saved;
+    });
+
+    TransactionSynchronizationManager.initSynchronization();
+    try {
+      ChatMessage saved = service.send(authentication("anna"), 12L, null, "Hello", null);
+
+      // Nothing leaves the server while the transaction is still open.
+      verifyNoInteractions(events, notifications);
+
+      // A rollback must not publish anything.
+      List<TransactionSynchronization> pending = TransactionSynchronizationManager.getSynchronizations();
+      pending.forEach(sync -> sync.afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK));
+      verifyNoInteractions(events, notifications);
+
+      pending.forEach(TransactionSynchronization::afterCommit);
+      verify(events).publish(12L, "message.created", 99L);
+      verify(notifications).notifyNewMessage(saved);
+    } finally {
+      TransactionSynchronizationManager.clearSynchronization();
+    }
   }
 
   private static ChatMessage message(Long id) {

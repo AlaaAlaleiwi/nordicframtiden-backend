@@ -160,7 +160,6 @@ class AdminServiceRoleFlowTest {
     @Test
     void createAdminWithProfileAssignsOnlyTheAdminRole() {
         // Flow 2: a pure admin account (no pharmacist/staff role needed).
-        when(adminProfileRepo.existsByEmail(any())).thenReturn(false);
         when(adminProfileRepo.existsByPhone(any())).thenReturn(false);
         when(repo.existsByUsername(any())).thenReturn(false);
         when(encoder.encode(any())).thenReturn("hash");
@@ -228,7 +227,6 @@ class AdminServiceRoleFlowTest {
         when(adminProfileRepo.findByUserId(7L)).thenReturn(Optional.empty());
         when(userProfileRepo.findByUserId(7L)).thenReturn(
             Optional.of(userProfile("Anna Andersson", "anna@example.com", "0701234567")));
-        when(userProfileRepo.existsByEmail("ny@example.com")).thenReturn(false);
         when(userProfileRepo.existsByPhone("0709999999")).thenReturn(false);
 
         AdminService.AdminRow row = service.updateAdminWithProfile(

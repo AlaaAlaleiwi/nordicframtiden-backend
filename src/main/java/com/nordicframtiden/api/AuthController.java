@@ -15,6 +15,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.*;
@@ -91,9 +92,9 @@ public class AuthController {
     @PostMapping("/refresh")
     public ResponseEntity<?> refresh(@RequestBody RefreshRequest request) {
         try {
-            String username = jwtService.validateRefreshToken(request.refreshToken()).getSubject();
-            AppUser user = userRepo.findByUsername(username).filter(AppUser::isEnabled)
-                    .orElseThrow(() -> new IllegalArgumentException("Active user not found"));
+            var claims = jwtService.validateRefreshToken(request.refreshToken());
+            AppUser user = jwtService.currentUser(claims, userRepo)
+                    .orElseThrow(() -> new IllegalArgumentException("Active user not found or token revoked"));
             List<String> roles = user.getRoles().stream().map(Role::name).toList();
             List<String> perms = user.getPermissions().stream().map(Permission::name).toList();
             return ResponseEntity.ok(tokens(user, roles, perms));
@@ -102,9 +103,26 @@ public class AuthController {
         }
     }
 
+    /** Device-local: the client discards its tokens. */
     @PostMapping("/logout")
     public ResponseEntity<?> logout() {
         return ResponseEntity.ok().build();
+    }
+
+    /** Invalidates every access and refresh token of the caller, on all devices. */
+    @PostMapping("/logout-all")
+    @Transactional
+    public ResponseEntity<?> logoutAll(Authentication authentication) {
+        // /auth/** is permitAll, so an anonymous caller arrives here too.
+        AppUser user = authentication == null || !authentication.isAuthenticated()
+                ? null
+                : userRepo.findByUsername(authentication.getName()).orElse(null);
+        if (user == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+        user.revokeTokens();
+        userRepo.save(user);
+        return ResponseEntity.noContent().build();
     }
 
     @GetMapping("/me")
@@ -138,8 +156,8 @@ public class AuthController {
         claims.put("roles", roles);
         claims.put("perms", perms);
         return new LoginResponse(
-                jwtService.generateAccessToken(user.getUsername(), claims),
-                jwtService.generateRefreshToken(user.getUsername()),
+                jwtService.generateAccessToken(user, claims),
+                jwtService.generateRefreshToken(user),
                 roles,
                 perms
         );
@@ -152,12 +170,9 @@ public class AuthController {
     /** Always answers 200 so the endpoint cannot be used to enumerate accounts. */
     @PostMapping("/forgot-password")
     public ResponseEntity<?> forgotPassword(@RequestBody ForgotPasswordRequest request) {
-        try {
-            passwordResetService.requestReset(request.email());
-        } catch (RuntimeException e) {
-            // Keep account details, email addresses and provider error text out of logs.
-            log.error("Password reset request failed (mail not sent): {}", e.getClass().getSimpleName());
-        }
+        // Asynchronous: the response time must not reveal whether the email
+        // is registered. Failures are logged (without PII) by the worker.
+        passwordResetService.requestResetInBackground(request == null ? null : request.email());
         return ResponseEntity.ok(Map.of("message",
             "Om mejladressen är registrerad har ett mejl med återställningslänk skickats."));
     }

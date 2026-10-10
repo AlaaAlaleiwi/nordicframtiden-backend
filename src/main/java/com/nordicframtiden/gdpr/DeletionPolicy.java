@@ -2,9 +2,11 @@ package com.nordicframtiden.gdpr;
 
 import com.nordicframtiden.company.StaffShiftRepository;
 import com.nordicframtiden.pharmacy.ScheduleShiftRepository;
+import com.nordicframtiden.service.PayrollCalendar;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.time.YearMonth;
 import java.time.ZoneId;
 import java.time.temporal.TemporalAdjusters;
 import java.util.Comparator;
@@ -34,6 +36,9 @@ import org.springframework.stereotype.Service;
 public class DeletionPolicy {
 
   public static final ZoneId ZONE = ZoneId.of("Europe/Stockholm");
+
+  /** How far ahead pre-booked shifts are considered for the deletion date. */
+  private static final int SHIFT_HORIZON_YEARS = 5;
 
   /** Requests that block new shifts / direct deletion until closed. */
   private static final List<String> OPEN_STATUSES = List.of(
@@ -81,15 +86,35 @@ public class DeletionPolicy {
    * The window (first day of M .. last day of M+1) in which new shifts are
    * still allowed while a deletion request is open; null when no request is
    * open. Existing shifts inside the window are never touched — payroll.
+   * Once approved, the window also ends with the last work month whose
+   * payslip is delivered before the scheduled deletion date — a shift booked
+   * after approval must never be wiped before it is paid.
    */
   public ShiftBlock shiftBlock(Long userId) {
-    if (openRequest(userId).isEmpty()) {
+    Optional<GdprDeletionRequest> open = openRequest(userId);
+    if (open.isEmpty()) {
       return null;
     }
     LocalDate today = LocalDate.now(clock);
-    return new ShiftBlock(
-        today.withDayOfMonth(1),
-        today.plusMonths(1).with(TemporalAdjusters.lastDayOfMonth()));
+    LocalDate until = today.plusMonths(1).with(TemporalAdjusters.lastDayOfMonth());
+    LocalDate scheduled = open.get().getScheduledDate();
+    if (scheduled != null) {
+      LocalDate lastPaid = lastWorkMonthPaidBefore(scheduled).atEndOfMonth();
+      if (lastPaid.isBefore(until)) until = lastPaid;
+    }
+    return new ShiftBlock(today.withDayOfMonth(1), until);
+  }
+
+  /**
+   * Latest work month whose payslip ready date falls strictly before
+   * {@code deletionDate}. Strictly: the deletion job (03:30) runs before the
+   * payslip delivery job (04:00) on the same day.
+   */
+  static YearMonth lastWorkMonthPaidBefore(LocalDate deletionDate) {
+    YearMonth candidate = YearMonth.from(deletionDate).minusMonths(1);
+    return PayrollCalendar.readyDateFor(candidate).isBefore(deletionDate)
+        ? candidate
+        : candidate.minusMonths(1);
   }
 
   public record ShiftBlock(LocalDate blockFrom, LocalDate blockUntil) {}
@@ -116,14 +141,15 @@ public class DeletionPolicy {
   // ---------- Deletion dates ----------
 
   /**
-   * End of the month after the user's last shift month (shifts starting in M
-   * or M+1), or MIN_GRACE_DAYS out when there are none — every hour is then
-   * paid before the account disappears.
+   * End of the month after the user's last shift month (any shift from M
+   * onwards — including ones booked beyond M+1 before the request was filed),
+   * or MIN_GRACE_DAYS out when there are none — every hour is then paid
+   * before the account disappears.
    */
   public LocalDate suggestedDeletionDate(Long userId) {
     LocalDate today = LocalDate.now(clock);
     OffsetDateTime from = today.withDayOfMonth(1).atStartOfDay(ZONE).toOffsetDateTime();
-    OffsetDateTime to = today.plusMonths(2).withDayOfMonth(1).atStartOfDay(ZONE).toOffsetDateTime();
+    OffsetDateTime to = today.plusYears(SHIFT_HORIZON_YEARS).withDayOfMonth(1).atStartOfDay(ZONE).toOffsetDateTime();
 
     Optional<OffsetDateTime> lastStart = Stream.concat(
         scheduleShifts.findInRange(from, to, null, userId).stream()
@@ -158,6 +184,26 @@ public class DeletionPolicy {
   public boolean hasShiftsInCurrentMonth(Long userId) {
     LocalDate today = LocalDate.now(clock);
     OffsetDateTime from = today.withDayOfMonth(1).atStartOfDay(ZONE).toOffsetDateTime();
+    OffsetDateTime to = from.plusMonths(1);
+    return !scheduleShifts.findInRange(from, to, null, userId).isEmpty()
+        || !staffShifts.findInRange(from, to, userId).isEmpty();
+  }
+
+  /**
+   * True while the user has shifts whose pay has not been delivered yet: any
+   * shift starting this month, or last month until the day after its payslip
+   * ready date. Deleting the account before then wipes unpaid payroll records.
+   */
+  public boolean hasUnpaidShifts(Long userId) {
+    if (hasShiftsInCurrentMonth(userId)) {
+      return true;
+    }
+    LocalDate today = LocalDate.now(clock);
+    YearMonth previous = YearMonth.from(today).minusMonths(1);
+    if (today.isAfter(PayrollCalendar.readyDateFor(previous))) {
+      return false;
+    }
+    OffsetDateTime from = previous.atDay(1).atStartOfDay(ZONE).toOffsetDateTime();
     OffsetDateTime to = from.plusMonths(1);
     return !scheduleShifts.findInRange(from, to, null, userId).isEmpty()
         || !staffShifts.findInRange(from, to, userId).isEmpty();

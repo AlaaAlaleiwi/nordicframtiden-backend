@@ -31,5 +31,17 @@ public interface ChatMessageRepository extends JpaRepository<ChatMessage, Long> 
 
   long countByParentId(Long parentId);
 
+  /**
+   * Every message the account sent — any room (including rooms since left),
+   * top-level and thread replies alike — for the GDPR data export.
+   */
+  @Query("""
+      select m from ChatMessage m
+      join fetch m.room
+      where m.sender.id = :senderId
+      order by m.id asc
+      """)
+  List<ChatMessage> findAllBySenderIdForExport(@Param("senderId") Long senderId);
+
   void deleteBySender(com.nordicframtiden.security.model.AppUser sender);
 }

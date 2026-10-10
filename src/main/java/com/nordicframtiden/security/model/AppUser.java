@@ -41,6 +41,12 @@ public class AppUser {
   @Column(name = "photo_updated_at")
   private java.time.Instant photoUpdatedAt;
 
+  // Embedded in every JWT ("tv"); a token is only accepted while it matches.
+  // Bumped on password change, on disabling and on "log out everywhere", so
+  // stolen or stale tokens stop working server-side.
+  @Column(name = "token_version", nullable = false)
+  private int tokenVersion;
+
 
   // getters/setters
   public Long getId() {
@@ -64,6 +70,11 @@ public class AppUser {
   }
 
   public void setPasswordHash(String passwordHash) {
+    // A changed password ends every existing session (field access: loading
+    // from the database never runs this).
+    if (this.passwordHash != null && !this.passwordHash.equals(passwordHash)) {
+      revokeTokens();
+    }
     this.passwordHash = passwordHash;
   }
 
@@ -72,7 +83,20 @@ public class AppUser {
   }
 
   public void setEnabled(boolean enabled) {
+    // Disabling ends every session, so re-enabling never revives old tokens.
+    if (this.enabled && !enabled) {
+      revokeTokens();
+    }
     this.enabled = enabled;
+  }
+
+  public int getTokenVersion() {
+    return tokenVersion;
+  }
+
+  /** Invalidates every access and refresh token issued so far. */
+  public void revokeTokens() {
+    tokenVersion++;
   }
 
   public Set<Role> getRoles() {

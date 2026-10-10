@@ -189,6 +189,30 @@ public class UserService {
     return perms == null ? Set.of() : perms;
   }
 
+  private static boolean callerIs(AppUser user) {
+    var auth = org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+    return auth != null && user.getUsername() != null && user.getUsername().equals(auth.getName());
+  }
+
+  private com.nordicframtiden.admin.model.AdminProfileRepository adminProfiles;
+
+  /** Optional so the many unit-test constructions stay unchanged. */
+  @Autowired(required = false)
+  public void setAdminProfiles(com.nordicframtiden.admin.model.AdminProfileRepository adminProfiles) {
+    this.adminProfiles = adminProfiles;
+  }
+
+  /**
+   * Password reset looks the email up case-insensitively across user AND
+   * admin profiles and needs exactly one match — so duplicates are refused
+   * the same way, or one account could hijack or block another's reset.
+   */
+  private boolean emailTaken(String email) {
+    String trimmed = email.trim();
+    return profileRepo.findByEmailIgnoreCase(trimmed).isPresent()
+        || (adminProfiles != null && adminProfiles.findByEmailIgnoreCase(trimmed).isPresent());
+  }
+
   private static boolean callerIsAdmin() {
     var auth = org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
     return auth != null && auth.getAuthorities().stream()
@@ -309,7 +333,7 @@ public class UserService {
     validateYear(yearOfBirth);
     validateCodes(countyCode, municipalityCode);
 
-    if (profileRepo.existsByEmail(email)) throw new IllegalArgumentException("Email already exists");
+    if (emailTaken(email)) throw new IllegalArgumentException("Email already exists");
     if (profileRepo.existsByPhone(phone)) throw new IllegalArgumentException("Phone already exists");
 
     String username = generateUniqueUsername(fullName);
@@ -395,12 +419,13 @@ public class UserService {
     if (email != null && !email.isBlank() && !email.equalsIgnoreCase(p.getEmail())) {
       // Self-service password reset trusts the stored email, so whoever can
       // change it can take over the account. PERM_PEOPLE staff may edit
-      // pharmacists but not redirect their email — that stays admin-only.
-      if (!callerIsAdmin()) {
+      // pharmacists but not redirect their email — that stays admin-only
+      // (the owner may change their own, via PUT /api/users/me).
+      if (!callerIsAdmin() && !callerIs(u)) {
         throw new org.springframework.security.access.AccessDeniedException(
             "Endast administratörer kan ändra en annan användares e-postadress.");
       }
-      if (profileRepo.existsByEmail(email)) throw new IllegalArgumentException("Email already exists");
+      if (emailTaken(email)) throw new IllegalArgumentException("Email already exists");
       p.setEmail(email.trim());
     }
 
@@ -512,6 +537,20 @@ public class UserService {
   public void deleteUser(Long id) {
     AppUser u = userRepo.findById(id).orElseThrow(() -> new IllegalArgumentException("User not found"));
 
+    // Direct deletion guard: while the user has shifts in the current month
+    // (or last month, until its payslip is delivered) they are still owed pay —
+    // deleting now would wipe the payroll records. Send the admin to the
+    // deletion-request flow instead; it schedules the deletion after the last
+    // payroll month. The nightly GDPR job hits this guard too and retries.
+    // Runs before the ADMIN delegation: dual-role ADMIN+USER accounts work
+    // shifts too.
+    if (deletionPolicy != null && deletionPolicy.hasUnpaidShifts(id)) {
+      throw new com.nordicframtiden.gdpr.UserDeletionBlockedException(
+          "Radering blockerad: användaren har arbetspass den här månaden och får sin lön nästa månad. "
+              + "Använd raderingsbegäranden i stället — raderingen schemaläggs automatiskt "
+              + "efter sista lönemånaden.");
+    }
+
     // ADMIN accounts (including dual-role ADMIN+USER shown in People) need
     // the admin cleanup path — user_profile, admin_profile, self-delete and
     // last-admin guards. Delegating keeps one complete deletion routine.
@@ -525,16 +564,6 @@ public class UserService {
       return;
     }
 
-    // Direct deletion guard: while the user has shifts in the current month
-    // they still work this month and get paid next month — deleting now would
-    // wipe the payroll records. Send the admin to the deletion-request flow
-    // instead; it schedules the deletion after the last payroll month.
-    if (deletionPolicy != null && deletionPolicy.hasShiftsInCurrentMonth(id)) {
-      throw new com.nordicframtiden.gdpr.UserDeletionBlockedException(
-          "Radering blockerad: användaren har arbetspass den här månaden och får sin lön nästa månad. "
-              + "Använd raderingsbegäranden i stället — raderingen schemaläggs automatiskt "
-              + "efter sista lönemånaden.");
-    }
 
     // Delete dependent rows whose foreign keys lack ON DELETE CASCADE,
     // otherwise the final delete fails (staff_shift, availability_request,

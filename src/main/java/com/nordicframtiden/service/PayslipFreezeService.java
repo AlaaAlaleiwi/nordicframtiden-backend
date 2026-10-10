@@ -85,7 +85,7 @@ public class PayslipFreezeService {
    * snapshot and its revision history (revisions are also removed explicitly
    * so the operation never depends on cascade configuration). Guarded to the
    * same windows as editing — the current month, or the previous month
-   * through the 20th — so closed payroll history can never be reopened here.
+   * until its payslip ready date — so closed payroll history can never be reopened here.
    * Fix tool for snapshots created before the finalization-window check
    * existed (e.g. a finalized current month, which silently locks every
    * add-field/delete/save action in the apps).
@@ -124,7 +124,7 @@ public class PayslipFreezeService {
     requireEditablePeriod(year, month);
     lock(userId, year, month, role);
     // The editable window beats finalization: a month finalized inside the
-    // window (current month; previous month through the 20th) is reopened as
+    // window (current month; previous month until its ready date) is reopened as
     // a draft first, so fields stay addable/deletable/savable. Once the
     // window closes, requireEditablePeriod refuses and the freeze stands.
     // Adjustments currently belong to a user/month, shared by USER and STAFF.
@@ -235,18 +235,20 @@ public class PayslipFreezeService {
     LocalDate today = LocalDate.now(clock);
     YearMonth current = YearMonth.from(today);
     boolean currentMonth = target.equals(current);
-    boolean previousBeforeDeadline = target.equals(current.minusMonths(1)) && today.getDayOfMonth() <= 20;
+    boolean previousBeforeDeadline = target.equals(current.minusMonths(1)) && beforeReadyDate(target, today);
     if (!currentMonth && !previousBeforeDeadline) {
       throw new PayslipConflictException(
-          "Payroll period is closed. The previous month can be updated through the 20th of the payment month");
+          "Payroll period is closed. The previous month can be updated until the payslip ready date "
+              + "(the 21st, or the previous working day)");
     }
   }
   private void requireFinalizationWindow(int year, int month) {
     LocalDate today = LocalDate.now(clock);
     YearMonth target = YearMonth.of(year, month);
-    if (!target.equals(YearMonth.from(today).minusMonths(1)) || today.getDayOfMonth() > 20) {
+    if (!target.equals(YearMonth.from(today).minusMonths(1)) || !beforeReadyDate(target, today)) {
       throw new PayslipConflictException(
-          "Only the previous month's payslip can be finalized, through the 20th of the payment month");
+          "Only the previous month's payslip can be finalized, until the payslip ready date "
+              + "(the 21st, or the previous working day)");
     }
   }
   private boolean isClosedPeriod(int year, int month) {
@@ -254,7 +256,16 @@ public class PayslipFreezeService {
     YearMonth target = YearMonth.of(year, month);
     YearMonth current = YearMonth.from(today);
     return target.isBefore(current.minusMonths(1))
-        || (target.equals(current.minusMonths(1)) && today.getDayOfMonth() > 20);
+        || (target.equals(current.minusMonths(1)) && !beforeReadyDate(target, today));
+  }
+  /**
+   * The previous month stays editable until the day its payslips are emailed
+   * (PayrollCalendar: the 21st, or the previous working day). When the 21st is
+   * a weekend/holiday the window closes early, so delivery — which finalizes
+   * closed months — never emails a draft that is still being edited.
+   */
+  private static boolean beforeReadyDate(YearMonth workMonth, LocalDate today) {
+    return today.isBefore(PayrollCalendar.readyDateFor(workMonth));
   }
   private void lock(Long userId, int year, int month, String role) {
     YearMonth.of(year, month); normalizeRole(role);

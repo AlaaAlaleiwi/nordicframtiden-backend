@@ -37,4 +37,14 @@ List<ScheduleShift> findByUserIdAndStartAtLessThanAndEndAtGreaterThan(
   @Param("end") OffsetDateTime end,
   @Param("start") OffsetDateTime start
 );
+
+/** True when the pharmacy has any shift on a day before {@code before} (locked history). */
+@Query("""
+  select count(s) > 0 from ScheduleShift s
+  where s.pharmacy.id = :pharmacyId and s.startAt < :before
+""")
+boolean existsWorkedShiftAtPharmacy(
+  @Param("pharmacyId") Long pharmacyId,
+  @Param("before") OffsetDateTime before
+);
 }

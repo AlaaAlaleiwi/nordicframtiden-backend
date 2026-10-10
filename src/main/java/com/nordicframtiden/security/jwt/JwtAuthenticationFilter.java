@@ -56,14 +56,13 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     try {
       Claims claims = jwtService.validateAccessToken(token);
-      String username = claims.getSubject();
-      AppUser user = userRepository.findByUsername(username)
-          .filter(AppUser::isEnabled)
-          .orElseThrow(() -> new IllegalArgumentException("Active user not found"));
+      AppUser user = jwtService.currentUser(claims, userRepository)
+          .orElseThrow(() -> new IllegalArgumentException("Active user not found or token revoked"));
 
       var authorities = buildAuthorities(user);
 
-      var auth = new UsernamePasswordAuthenticationToken(username, null, authorities);
+      // The principal is the account's CURRENT username (renames keep working).
+      var auth = new UsernamePasswordAuthenticationToken(user.getUsername(), null, authorities);
       auth.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
       SecurityContextHolder.getContext().setAuthentication(auth);
 

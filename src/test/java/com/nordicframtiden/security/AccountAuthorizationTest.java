@@ -46,6 +46,20 @@ class AccountAuthorizationTest {
     }
 
     @Test
+    void peopleStaffSeeDocumentsOfPharmacistsButNotOfAdminsOrStaff() {
+        var pharmacist = userWithRoles(Role.USER);
+        pharmacist.setUsername("anna");
+        var admin = userWithRoles(Role.ADMIN);
+        admin.setUsername("boss");
+        when(userRepository.findById(10L)).thenReturn(Optional.of(pharmacist));
+        when(userRepository.findById(20L)).thenReturn(Optional.of(admin));
+        var people = authentication("ROLE_STAFF", "PERM_PEOPLE");
+
+        assertThat(authorization.canViewDocuments(people, 10L)).isTrue();
+        assertThat(authorization.canViewDocuments(people, 20L)).isFalse();
+    }
+
+    @Test
     void ordinaryUserCannotManageAnotherAccount() {
         assertThat(authorization.canManage(authentication("ROLE_USER"), 12L)).isFalse();
         verifyNoInteractions(userRepository);

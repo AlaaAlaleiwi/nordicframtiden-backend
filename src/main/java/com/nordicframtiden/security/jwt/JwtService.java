@@ -11,6 +11,10 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Date;
 import java.util.Map;
+import java.util.Optional;
+
+import com.nordicframtiden.security.model.AppUser;
+import com.nordicframtiden.security.repo.AppUserRepository;
 
 @Component
 public class JwtService {
@@ -37,31 +41,57 @@ public class JwtService {
     this(secret, issuer, accessTokenMinutes, 30);
   }
 
-  public String generateAccessToken(String subject, Map<String, Object> claims) {
+  /** Claim holding the account id: usernames can be reused, ids never are. */
+  static final String USER_ID_CLAIM = "uid";
+  /** Claim holding {@link AppUser#getTokenVersion()} at issue time. */
+  static final String TOKEN_VERSION_CLAIM = "tv";
+
+  public String generateAccessToken(AppUser user, Map<String, Object> claims) {
     Instant now = Instant.now();
     Instant exp = now.plus(accessTokenMinutes, ChronoUnit.MINUTES);
 
     return Jwts.builder()
         .setIssuer(issuer)
-        .setSubject(subject)
+        .setSubject(user.getUsername())
         .setIssuedAt(Date.from(now))
         .setExpiration(Date.from(exp))
         .addClaims(claims) // roles + perms go here
+        .claim(USER_ID_CLAIM, user.getId())
+        .claim(TOKEN_VERSION_CLAIM, user.getTokenVersion())
         .claim("type", "access")
         .signWith(key, SignatureAlgorithm.HS256)
         .compact();
   }
 
-  public String generateRefreshToken(String subject) {
+  public String generateRefreshToken(AppUser user) {
     Instant now = Instant.now();
     return Jwts.builder()
         .setIssuer(issuer)
-        .setSubject(subject)
+        .setSubject(user.getUsername())
         .setIssuedAt(Date.from(now))
         .setExpiration(Date.from(now.plus(refreshTokenDays, ChronoUnit.DAYS)))
+        .claim(USER_ID_CLAIM, user.getId())
+        .claim(TOKEN_VERSION_CLAIM, user.getTokenVersion())
         .claim("type", "refresh")
         .signWith(key, SignatureAlgorithm.HS256)
         .compact();
+  }
+
+  /**
+   * The active account a validated token belongs to, or empty when the
+   * account is gone or disabled, or the token predates its last revocation
+   * (password change, disable, "log out everywhere"). Tokens without the id
+   * and version claims (issued before revocation existed) are rejected.
+   */
+  public Optional<AppUser> currentUser(Claims claims, AppUserRepository users) {
+    Long userId = claims.get(USER_ID_CLAIM, Long.class);
+    Integer version = claims.get(TOKEN_VERSION_CLAIM, Integer.class);
+    if (userId == null || version == null) {
+      return Optional.empty();
+    }
+    return users.findById(userId)
+        .filter(AppUser::isEnabled)
+        .filter(user -> user.getTokenVersion() == version);
   }
 
   public Jws<Claims> parse(String token) throws JwtException {

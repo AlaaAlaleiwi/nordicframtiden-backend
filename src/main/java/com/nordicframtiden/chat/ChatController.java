@@ -8,6 +8,7 @@ import com.nordicframtiden.security.repo.UserProfileRepository;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.InvalidMediaTypeException;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
@@ -200,6 +201,10 @@ public class ChatController {
           .body("{\"error\":\"Attachment bytes no longer available\"}".getBytes());
     }
 
+    // Resolve the (client-supplied) content type before any side effects so a
+    // malformed value can never fail the request after the bytes were purged.
+    MediaType contentType = safeMediaType(attachment.getContentType());
+
     // Record delivery for this member, then purge if everyone has received
     // the attachment (this request included).
     if (!deliveries.existsByAttachmentIdAndUserId(attachmentId, me.getId())) {
@@ -212,8 +217,18 @@ public class ChatController {
 
     return ResponseEntity.ok()
         .header("Content-Disposition", "attachment; filename=\"" + attachment.getFileName().replace("\"", "") + "\"")
-        .contentType(MediaType.parseMediaType(attachment.getContentType()))
+        .contentType(contentType)
         .body(data);
+  }
+
+  /** Parses a stored content type, degrading to octet-stream when malformed. */
+  static MediaType safeMediaType(String value) {
+    if (value == null || value.isBlank()) return MediaType.APPLICATION_OCTET_STREAM;
+    try {
+      return MediaType.parseMediaType(value);
+    } catch (InvalidMediaTypeException e) {
+      return MediaType.APPLICATION_OCTET_STREAM;
+    }
   }
 
   @PutMapping("/messages/{messageId}")

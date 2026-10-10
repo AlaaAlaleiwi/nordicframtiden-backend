@@ -110,11 +110,14 @@ public class PayslipDeliveryService {
      */
     @Transactional
     public int queueIfReady(LocalDate today) {
-        Optional<YearMonth> readyMonth = PayrollCalendar.readyPayoutMonth(today);
-        if (readyMonth.isEmpty()) {
+        // On or AFTER the ready date: a run missed on the ready date itself
+        // (instance down, deploy) is caught up the next morning instead of
+        // that month never being queued. queueForMonth skips existing rows.
+        YearMonth workMonth = YearMonth.from(today).minusMonths(1);
+        if (today.isBefore(PayrollCalendar.readyDateFor(workMonth))) {
             return 0;
         }
-        return queueForMonth(readyMonth.get());
+        return queueForMonth(workMonth);
     }
 
     /**

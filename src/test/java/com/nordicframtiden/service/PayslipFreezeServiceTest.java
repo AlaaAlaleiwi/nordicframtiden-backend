@@ -169,11 +169,34 @@ class PayslipFreezeServiceTest {
   @Test void previousMonthClosesAfterTheTwentieth() {
     var afterDeadline = serviceAt("2026-09-21T10:00:00Z");
     assertThatThrownBy(() -> afterDeadline.saveAdjustments(7L, 2026, 8, "USER", List.of()))
-        .isInstanceOf(PayslipConflictException.class).hasMessageContaining("through the 20th");
+        .isInstanceOf(PayslipConflictException.class).hasMessageContaining("until the payslip ready date");
     assertThatThrownBy(() -> afterDeadline.preview(7L, 2026, 8, "USER",
         new PayrollService.PreviewRequest(null, List.of())))
         .isInstanceOf(PayslipConflictException.class).hasMessageContaining("closed");
     verifyNoInteractions(adjustments);
+  }
+  @Test void previousMonthClosesOnAnEarlyReadyDateSoDeliveryNeverEmailsADraft() {
+    // 2026-11-21 is a Saturday: payslips for October are emailed Friday the
+    // 20th, so October must already be closed (and auto-finalized) that day.
+    when(payroll.netSalaryForUserMonth(7L, 2026, 10)).thenReturn(original);
+    var thursday = serviceAt("2026-11-19T10:00:00Z");
+    assertThat(thursday.saveAdjustments(7L, 2026, 10, "USER", List.of())).isEqualTo(original);
+
+    var readyFriday = serviceAt("2026-11-20T10:00:00Z");
+    assertThatThrownBy(() -> readyFriday.saveAdjustments(7L, 2026, 10, "USER", List.of()))
+        .isInstanceOf(PayslipConflictException.class);
+    assertThatThrownBy(() -> readyFriday.finalizePayslip(7L, 2026, 10, "USER", "admin"))
+        .isInstanceOf(PayslipConflictException.class);
+
+    when(snapshots.saveAndFlush(any())).thenAnswer(i -> {
+      PayslipSnapshot saved = i.getArgument(0);
+      ReflectionTestUtils.setField(saved, "id", 43L);
+      return saved;
+    });
+    readyFriday.resolve(7L, 2026, 10, "USER");
+    var revision = org.mockito.ArgumentCaptor.forClass(PayslipRevision.class);
+    verify(revisions).saveAndFlush(revision.capture());
+    assertThat(revision.getValue().getActor()).isEqualTo("system-payroll-deadline");
   }
   @Test void readingPreviousMonthAfterDeadlineAutomaticallyFinalizesIt() {
     var afterDeadline = serviceAt("2026-09-21T10:00:00Z");

@@ -9,6 +9,7 @@ import com.nordicframtiden.security.repo.UserProfileRepository;
 import com.nordicframtiden.settings.EmailService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -74,22 +75,50 @@ public class PasswordResetService {
     if (email == null || email.isBlank()) return false;
     AppUser user = findByEmail(email.trim());
     if (user == null) return false;
+    // The link goes to the address ON FILE, never the typed one (the lookup
+    // is case-insensitive and may fall back across profile tables).
+    String recipient = emailOf(user);
+    if ((recipient == null || recipient.isBlank()) && user.getUsername() != null
+        && user.getUsername().contains("@")) {
+      recipient = user.getUsername(); // email-as-username accounts: that IS the address on file
+    }
+    if (recipient == null || recipient.isBlank()) return false;
     String rawToken = tx.execute(status -> createToken(user));
+    boolean sent;
     try {
-      emailService.sendPasswordResetLink(email.trim(), user.getUsername(), rawToken, TOKEN_TTL_MINUTES);
+      sent = emailService.sendPasswordResetLink(recipient, user.getUsername(), rawToken, TOKEN_TTL_MINUTES);
     } catch (RuntimeException e) {
       log.error("Could not send password reset email (recipient redacted): {}", e.getClass().getSimpleName());
-      tokenRepo.deleteByUserId(user.getId());
-      return false;
+      sent = false;
     }
-    return true;
+    if (!sent) discardTokens(user);
+    return sent;
+  }
+
+  /**
+   * Login-page entry point. Runs on the mail pool so the HTTP response takes
+   * the same time whether or not the email is registered — a synchronous
+   * token write + SMTP round trip would reveal registered addresses.
+   */
+  @Async("mailExecutor")
+  public void requestResetInBackground(String email) {
+    try {
+      requestReset(email);
+    } catch (RuntimeException e) {
+      log.error("Password reset request failed (mail not sent): {}", e.getClass().getSimpleName());
+    }
+  }
+
+  /** The delete query needs a transaction; a failed send must not leave a live token. */
+  private void discardTokens(AppUser user) {
+    tx.executeWithoutResult(status -> tokenRepo.deleteByUserId(user.getId()));
   }
 
   /**
    * Welcome invite for a newly created account: sends a link so the person
    * sets their own password. Returns false when the account has no email on
-   * file; a mail failure propagates so the admin sees a real error instead of
-   * a false "email sent" confirmation.
+   * file or mail is disabled/unconfigured; a mail failure propagates so the
+   * admin sees a real error instead of a false "email sent" confirmation.
    */
   public boolean sendWelcomeInvite(Long userId) {
     AppUser user = userRepo.findById(userId)
@@ -97,14 +126,16 @@ public class PasswordResetService {
     String email = emailOf(user);
     if (email == null || email.isBlank()) return false;
     String rawToken = tx.execute(status -> createToken(user));
-    emailService.sendWelcomeEmail(email, fullNameOf(user, user.getUsername()), user.getUsername(), rawToken, TOKEN_TTL_MINUTES);
-    return true;
+    boolean sent = emailService.sendWelcomeEmail(email, fullNameOf(user, user.getUsername()), user.getUsername(), rawToken, TOKEN_TTL_MINUTES);
+    if (!sent) discardTokens(user);
+    return sent;
   }
 
   /**
    * Admin-initiated reset: issues a reset-link email. Returns false when the
-   * account has no email on file; a mail failure propagates so the admin sees
-   * an error instead of a false "email sent" confirmation.
+   * account has no email on file or mail is disabled/unconfigured; a mail
+   * failure propagates so the admin sees an error instead of a false "email
+   * sent" confirmation.
    */
   public boolean adminReset(Long userId) {
     AppUser user = userRepo.findById(userId)
@@ -112,8 +143,9 @@ public class PasswordResetService {
     String email = emailOf(user);
     if (email == null || email.isBlank()) return false;
     String rawToken = tx.execute(status -> createToken(user));
-    emailService.sendPasswordResetLink(email, user.getUsername(), rawToken, TOKEN_TTL_MINUTES);
-    return true;
+    boolean sent = emailService.sendPasswordResetLink(email, user.getUsername(), rawToken, TOKEN_TTL_MINUTES);
+    if (!sent) discardTokens(user);
+    return sent;
   }
 
   /** True when the token exists, is unused and unexpired. */
